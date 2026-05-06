@@ -305,3 +305,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
 /* ── Notification panel z-fix (v2) ─────────────────────── */
 .notif-panel{z-index:500}
+
+/* ── v3: Availability & Time Off cards ───────────────────────────── */
+.v3-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius2);
+  padding: 18px;
+  margin-bottom: 12px;
+  transition: border-color .15s;
+}
+.v3-card:hover { border-color: var(--border2); }
+.list-shift-to { border-color: rgba(245,158,11,.3) !important; background: rgba(245,158,11,.03) !important; }
+.btn-amber { background: rgba(245,158,11,.15); color: var(--amber); border: 1px solid rgba(245,158,11,.25); }
+.btn-amber:hover { background: rgba(245,158,11,.25); }
