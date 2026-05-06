@@ -1811,9 +1811,14 @@ function renderTimeOffEmployee() {
   var myReqs = DB.timeOffRequests.filter(function(r){ return r.userId===u.id; }).slice().reverse();
   var h = '<div style="max-width:700px"><div class="section-header"><div>';
   h += '<div class="section-title">My Time Off Requests</div>';
-  h += '<div style="font-size:13px;color:var(--text2);margin-top:2px">Sick days and unpaid leave</div></div></div>';
+  h += '<div style="font-size:13px;color:var(--text2);margin-top:2px">Sick days and unpaid leave</div>';
+  h += '</div>';
+  h += '<button class="btn btn-primary" onclick="openModal(\'create-timeoff\',{})">';
+  h += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+  h += ' Request Time Off</button>';
+  h += '</div>';
   if (!myReqs.length)
-    h += '<div class="empty-state"><div class="empty-icon">\uD83C\uDF34</div><div class="empty-title">No time-off requests</div><div class="empty-sub">Use the button above to submit a request</div></div>';
+    h += '<div class="empty-state"><div class="empty-icon">\uD83C\uDF34</div><div class="empty-title">No time-off requests</div><div class="empty-sub">Click "Request Time Off" above to submit your first request.</div></div>';
   else myReqs.forEach(function(r){ h += renderTOCard(r, false); });
   h += '</div>'; return h;
 }
