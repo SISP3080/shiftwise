@@ -292,3 +292,16 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .w-full{width:100%}
 .hidden{display:none!important}
 .divider{height:1px;background:var(--border);margin:16px 0}
+
+/* ── Dashboard grid (added in v2) ──────────────────────── */
+.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:0}
+@media(max-width:800px){.dash-grid{grid-template-columns:1fr}}
+
+/* ── Stat grid responsive (v2) ──────────────────────────── */
+@media(max-width:800px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+
+/* ── Modal title flex fix (v2) ──────────────────────────── */
+.modal-title{font-family:var(--font-display);font-weight:700;font-size:17px;color:var(--text);line-height:1.2}
+
+/* ── Notification panel z-fix (v2) ─────────────────────── */
+.notif-panel{z-index:500}
