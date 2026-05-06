@@ -329,8 +329,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <div id="toast-container"></div>
 <script>
 'use strict';
-// ShiftWise v3.0
-document.addEventListener('DOMContentLoaded', function() {
+// ═══════════════════════════════════════════════════════════════════
+// ShiftWise v3.0 — Production Enhancement
 // NEW v3: 12h AM/PM display everywhere, Availability system, Time-Off system
 // All v2 features preserved and regression-tested.
 // ═══════════════════════════════════════════════════════════════════
@@ -367,6 +367,67 @@ var DB = {
   // v3 NEW: timeOffRequests[]{id,userId,startDate,endDate,type,notes,digitalSignatureName,submittedAt,status,reviewedBy,reviewedAt,adminNotes}
   timeOffRequests:      [],
 };
+
+// ─── UTILITY HELPERS (must be defined before seed functions) ──────
+function now()           { return new Date().toISOString(); }
+// ─── HELPERS ───────────────────────────────────────────────────────
+function fmtDate(d)      { return d.toISOString().slice(0,10); }
+function todayStr()      { return fmtDate(new Date()); }
+function timeToMins(t)   { var p=t.split(':'); return +p[0]*60+(+p[1]||0); }
+function getUser(id)     { return DB.users.find(function(u){return u.id===id;}); }
+function getShift(id)    { return DB.shifts.find(function(s){return s.id===id;}); }
+function getSwap(id)     { return DB.swaps.find(function(s){return s.id===id;}); }
+function initials(name)  { return name.split(' ').map(function(n){return n[0];}).slice(0,2).join('').toUpperCase(); }
+function isAdminOrMgr()  { return state.currentUser && (state.currentUser.role==='ADMIN'||state.currentUser.role==='MANAGER'); }
+function nextId(p)       { return p+Date.now()+Math.random().toString(36).slice(2,6); }
+function esc(s)          { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+function fmtDateLabel(s) {
+  var t = todayStr();
+  var d = new Date(s + 'T00:00:00');
+  var tom = new Date(); tom.setDate(tom.getDate()+1);
+  if (s === t) return 'Today, ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
+  if (s === fmtDate(tom)) return 'Tomorrow, ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
+  return DAYS_SHORT[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
+}
+function relTime(iso) {
+  var diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60)    return 'just now';
+  if (diff < 3600)  return Math.floor(diff/60)   + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600)  + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+// ─── AM/PM TIME FORMAT (v3 NEW) ─────────────────────────────────
+// Storage stays 24h. Only display uses 12h AM/PM.
+function fmt12(t){
+  if(!t)return'';
+  var p=t.split(':'); var h=+p[0]; var m=p[1]||'00';
+  return(h%12||12)+':'+m+' '+(h<12?'AM':'PM');
+}
+function fmtRange(s,e){return fmt12(s)+' – '+fmt12(e);}
+
+// ─── TIME-OFF BLOCK CHECK (v3 NEW) ───────────────────────────────
+function isOnApprovedTimeOff(empId,date){
+  return DB.timeOffRequests.some(function(r){
+    return r.userId===empId&&r.status==='APPROVED'&&r.startDate<=date&&r.endDate>=date;
+  });
+}
+// ─── AVAILABILITY HELPERS (v3 NEW) ────────────────────────────────
+function getUserAvailability(userId){
+  return WEEK_DAYS_AV.map(function(wd){
+    return DB.availability.find(function(a){return a.userId===userId&&a.dayOfWeek===wd.idx;})||
+      {userId:userId,dayOfWeek:wd.idx,startTime:'09:00',endTime:'17:00',isAvailable:false};
+  });
+}
+
+function addNotif(userId, title, message, type) {
+  DB.notifications.unshift({
+    id: nextId('n'), userId: userId, title: title,
+    message: message, type: type||'info', read: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 
 // Seed shifts spanning current week and next week
 (function seedShifts() {
@@ -484,63 +545,6 @@ document.addEventListener('keydown', function(e) {
   if (state.notifOpen) { state.notifOpen = false; render();   return; }
 });
 
-// ─── HELPERS ───────────────────────────────────────────────────────
-function fmtDate(d)      { return d.toISOString().slice(0,10); }
-function todayStr()      { return fmtDate(new Date()); }
-function timeToMins(t)   { var p=t.split(':'); return +p[0]*60+(+p[1]||0); }
-function getUser(id)     { return DB.users.find(function(u){return u.id===id;}); }
-function getShift(id)    { return DB.shifts.find(function(s){return s.id===id;}); }
-function getSwap(id)     { return DB.swaps.find(function(s){return s.id===id;}); }
-function initials(name)  { return name.split(' ').map(function(n){return n[0];}).slice(0,2).join('').toUpperCase(); }
-function isAdminOrMgr()  { return state.currentUser && (state.currentUser.role==='ADMIN'||state.currentUser.role==='MANAGER'); }
-function nextId(p)       { return p+Date.now()+Math.random().toString(36).slice(2,6); }
-function esc(s)          { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-
-function fmtDateLabel(s) {
-  var t = todayStr();
-  var d = new Date(s + 'T00:00:00');
-  var tom = new Date(); tom.setDate(tom.getDate()+1);
-  if (s === t) return 'Today, ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
-  if (s === fmtDate(tom)) return 'Tomorrow, ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
-  return DAYS_SHORT[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
-}
-function relTime(iso) {
-  var diff = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (diff < 60)    return 'just now';
-  if (diff < 3600)  return Math.floor(diff/60)   + 'm ago';
-  if (diff < 86400) return Math.floor(diff/3600)  + 'h ago';
-  return Math.floor(diff/86400) + 'd ago';
-}
-// ─── AM/PM TIME FORMAT (v3 NEW) ─────────────────────────────────
-// Storage stays 24h. Only display uses 12h AM/PM.
-function fmt12(t){
-  if(!t)return'';
-  var p=t.split(':'); var h=+p[0]; var m=p[1]||'00';
-  return(h%12||12)+':'+m+' '+(h<12?'AM':'PM');
-}
-function fmtRange(s,e){return fmt12(s)+' – '+fmt12(e);}
-
-// ─── TIME-OFF BLOCK CHECK (v3 NEW) ───────────────────────────────
-function isOnApprovedTimeOff(empId,date){
-  return DB.timeOffRequests.some(function(r){
-    return r.userId===empId&&r.status==='APPROVED'&&r.startDate<=date&&r.endDate>=date;
-  });
-}
-// ─── AVAILABILITY HELPERS (v3 NEW) ────────────────────────────────
-function getUserAvailability(userId){
-  return WEEK_DAYS_AV.map(function(wd){
-    return DB.availability.find(function(a){return a.userId===userId&&a.dayOfWeek===wd.idx;})||
-      {userId:userId,dayOfWeek:wd.idx,startTime:'09:00',endTime:'17:00',isAvailable:false};
-  });
-}
-
-function addNotif(userId, title, message, type) {
-  DB.notifications.unshift({
-    id: nextId('n'), userId: userId, title: title,
-    message: message, type: type||'info', read: false,
-    createdAt: new Date().toISOString(),
-  });
-}
 function shiftsOverlap(s1,e1,s2,e2) {
   return timeToMins(s1) < timeToMins(e2) && timeToMins(e1) > timeToMins(s2);
 }
@@ -2143,8 +2147,8 @@ expose.forEach(function(name){ window[name] = fns[name]; });
 // ─── BOOT ────────────────────────────────────────────────────────────
 render();
 
-})();
-}); // end DOMContentLoaded
+})(); // end IIFE
+
 </script>
 </body>
 </html>
