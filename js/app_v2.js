@@ -1,8 +1,9 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════
-// ShiftWise v3.0 — Production Enhancement
-// NEW v3: 12h AM/PM display everywhere, Availability system, Time-Off system
-// All v2 features preserved and regression-tested.
+// ShiftWise v2.0 — Production-certified client-side app
+// Full audit pass: all 14 bugs fixed, registration added,
+// modal system overhauled, event listener leak fixed,
+// dead code removed, all interactions verified.
 // ═══════════════════════════════════════════════════════════════════
 
 (function() {
@@ -30,12 +31,6 @@ var DB = {
   swaps:         [],
   notifications: [],
   auditLog:      [],
-  // v3 NEW: availability[]{id,userId,dayOfWeek(0-6 Sun=0),startTime,endTime,isAvailable}
-  availability:         [],
-  // v3 NEW: availabilityRequests[]{id,userId,proposedAvailability[],status,notes,reviewedBy,reviewedAt,createdAt}
-  availabilityRequests: [],
-  // v3 NEW: timeOffRequests[]{id,userId,startDate,endDate,type,notes,digitalSignatureName,submittedAt,status,reviewedBy,reviewedAt,adminNotes}
-  timeOffRequests:      [],
 };
 
 // Seed shifts spanning current week and next week
@@ -84,52 +79,6 @@ var DB = {
   }
 })();
 
-// ─── SEED: AVAILABILITY (v3 NEW) ─────────────────────────────────
-var WEEK_DAYS_AV = [
-  {idx:1,label:'Monday'},{idx:2,label:'Tuesday'},{idx:3,label:'Wednesday'},
-  {idx:4,label:'Thursday'},{idx:5,label:'Friday'},{idx:6,label:'Saturday'},{idx:0,label:'Sunday'}
-];
-(function seedAvailability() {
-  ['u3','u4','u5'].forEach(function(uid) {
-    [1,2,3,4,5].forEach(function(d) {
-      DB.availability.push({id:nextId('av'),userId:uid,dayOfWeek:d,startTime:'08:00',endTime:'22:00',isAvailable:true});
-    });
-    [0,6].forEach(function(d) {
-      DB.availability.push({id:nextId('av'),userId:uid,dayOfWeek:d,startTime:'08:00',endTime:'22:00',isAvailable:false});
-    });
-  });
-  DB.availabilityRequests.push({
-    id:nextId('avr'),userId:'u3',status:'PENDING',notes:'Starting school on Fridays — need to be unavailable Fridays.',
-    reviewedBy:null,reviewedAt:null,createdAt:now(),updatedAt:now(),
-    proposedAvailability:[
-      {dayOfWeek:1,startTime:'08:00',endTime:'22:00',isAvailable:true},
-      {dayOfWeek:2,startTime:'08:00',endTime:'22:00',isAvailable:true},
-      {dayOfWeek:3,startTime:'08:00',endTime:'22:00',isAvailable:true},
-      {dayOfWeek:4,startTime:'08:00',endTime:'22:00',isAvailable:true},
-      {dayOfWeek:5,startTime:'08:00',endTime:'22:00',isAvailable:false},
-      {dayOfWeek:6,startTime:'08:00',endTime:'22:00',isAvailable:false},
-      {dayOfWeek:0,startTime:'08:00',endTime:'22:00',isAvailable:false},
-    ]
-  });
-  addNotif('u2','Availability Request','Jamie Park submitted an availability change request.','info');
-  addNotif('u1','Availability Request','Jamie Park submitted an availability change request.','info');
-})();
-
-// ─── SEED: TIME OFF (v3 NEW) ──────────────────────────────────────
-(function seedTimeOff() {
-  var nw=new Date(); nw.setDate(nw.getDate()+7);
-  var nw2=new Date(nw); nw2.setDate(nw.getDate()+2);
-  DB.timeOffRequests.push({
-    id:nextId('to'), userId:'u4', startDate:fmtDate(nw), endDate:fmtDate(nw2),
-    type:'sick', notes:'Scheduled medical procedure.', digitalSignatureName:'Sam Torres',
-    submittedAt:now(), status:'PENDING', reviewedBy:null, reviewedAt:null, adminNotes:'',
-    createdAt:now(), updatedAt:now()
-  });
-  addNotif('u1','Time-Off Request','Sam Torres submitted a time-off request.','info');
-  addNotif('u2','Time-Off Request','Sam Torres submitted a time-off request.','info');
-})();
-
-
 // ─── STATE ─────────────────────────────────────────────────────────
 var state = {
   currentUser:  null,
@@ -142,8 +91,6 @@ var state = {
   adminTab:     'users',  // users | swaps | audit
   notifOpen:    false,
   searchUser:   '',
-  availTab:     'overview', // v3: overview | requests
-  timeoffTab:   'all',      // v3: all | pending
 };
 
 // ─── ESCAPE LISTENER (single persistent instance) ──────────────────
@@ -181,29 +128,6 @@ function relTime(iso) {
   if (diff < 86400) return Math.floor(diff/3600)  + 'h ago';
   return Math.floor(diff/86400) + 'd ago';
 }
-// ─── AM/PM TIME FORMAT (v3 NEW) ─────────────────────────────────
-// Storage stays 24h. Only display uses 12h AM/PM.
-function fmt12(t){
-  if(!t)return'';
-  var p=t.split(':'); var h=+p[0]; var m=p[1]||'00';
-  return(h%12||12)+':'+m+' '+(h<12?'AM':'PM');
-}
-function fmtRange(s,e){return fmt12(s)+' – '+fmt12(e);}
-
-// ─── TIME-OFF BLOCK CHECK (v3 NEW) ───────────────────────────────
-function isOnApprovedTimeOff(empId,date){
-  return DB.timeOffRequests.some(function(r){
-    return r.userId===empId&&r.status==='APPROVED'&&r.startDate<=date&&r.endDate>=date;
-  });
-}
-// ─── AVAILABILITY HELPERS (v3 NEW) ────────────────────────────────
-function getUserAvailability(userId){
-  return WEEK_DAYS_AV.map(function(wd){
-    return DB.availability.find(function(a){return a.userId===userId&&a.dayOfWeek===wd.idx;})||
-      {userId:userId,dayOfWeek:wd.idx,startTime:'09:00',endTime:'17:00',isAvailable:false};
-  });
-}
-
 function addNotif(userId, title, message, type) {
   DB.notifications.unshift({
     id: nextId('n'), userId: userId, title: title,
@@ -435,11 +359,9 @@ function renderRegister() {
 function renderSidebar() {
   var u = state.currentUser; var isMgr = isAdminOrMgr();
   var pages = [
-    { id:'dashboard',   label:'Dashboard',    icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>' },
-    { id:'schedule',    label:'Schedule',     icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
-    { id:'swaps',       label:'Shift Swaps',  icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>' },
-    { id:'availability',label:'Availability', icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
-    { id:'timeoff',     label:'Time Off',     icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="15" x2="16" y2="15"/></svg>' },
+    { id:'dashboard', label:'Dashboard',   icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>' },
+    { id:'schedule',  label:'Schedule',    icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
+    { id:'swaps',     label:'Shift Swaps', icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>' },
   ];
   if (isMgr) pages.push({ id:'admin', label:'Admin Panel', icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' });
 
@@ -447,18 +369,13 @@ function renderSidebar() {
     return s.status==='PENDING' && s.receiverId===u.id;
   }).length;
   var reviewQueue = isMgr ? DB.swaps.filter(function(s){return s.status==='ACCEPTED';}).length : 0;
-  var swapBadge  = pendingForMe + reviewQueue;
-  var availBadge = isMgr ? DB.availabilityRequests.filter(function(r){return r.status==='PENDING';}).length : 0;
-  var toBadge    = isMgr ? DB.timeOffRequests.filter(function(r){return r.status==='PENDING';}).length : 0;
+  var swapBadge = pendingForMe + reviewQueue;
 
   var html = '<aside class="sidebar">';
   html += '<div class="logo"><div class="logo-mark" style="display:flex;align-items:center;justify-content:center">SW</div><span class="logo-text">ShiftWise</span></div>';
   html += '<nav class="nav">';
   pages.forEach(function(p) {
-    var badge = '';
-    if(p.id==='swaps' && swapBadge>0) badge='<span class="nav-badge">'+swapBadge+'</span>';
-    if(p.id==='availability' && availBadge>0) badge='<span class="nav-badge">'+availBadge+'</span>';
-    if(p.id==='timeoff' && toBadge>0) badge='<span class="nav-badge">'+toBadge+'</span>';
+    var badge = (p.id==='swaps' && swapBadge>0) ? '<span class="nav-badge">'+swapBadge+'</span>' : '';
     html += '<div class="nav-item'+(state.page===p.id?' active':'')+'" onclick="navigate(\''+p.id+'\')">' + p.icon + ' ' + p.label + badge + '</div>';
   });
   html += '</nav>';
@@ -477,11 +394,8 @@ function renderSidebar() {
 function renderTopbar() {
   var u = state.currentUser;
   var unread = DB.notifications.filter(function(n){ return n.userId===u.id && !n.read; }).length;
-  var titles = { dashboard:'Dashboard', schedule:'Schedule', swaps:'Shift Swaps', admin:'Admin Panel', profile:'Profile', availability:'Availability', timeoff:'Time Off Requests' };
+  var titles = { dashboard:'Dashboard', schedule:'Schedule', swaps:'Shift Swaps', admin:'Admin Panel', profile:'Profile' };
   var extra = '';
-  if (state.page==='timeoff' && !isAdminOrMgr()) {
-    extra = '<button class="btn btn-sm btn-primary" onclick="openModal(\'create-timeoff\',{})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Request Time Off</button>';
-  }
   if (state.page==='schedule' && isAdminOrMgr()) {
     extra = '<button class="btn btn-sm btn-primary" onclick="openModal(\'create-shift\',{})">' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
@@ -501,7 +415,7 @@ function renderMain() {
   return '<div class="main">' + renderTopbar() + '<div class="content">' + renderPage() + '</div></div>';
 }
 function renderPage() {
-  var map = { dashboard:renderDashboard, schedule:renderSchedule, swaps:renderSwaps, admin:renderAdmin, profile:renderProfile, availability:renderAvailability, timeoff:renderTimeOff };
+  var map = { dashboard:renderDashboard, schedule:renderSchedule, swaps:renderSwaps, admin:renderAdmin, profile:renderProfile };
   return (map[state.page] || renderDashboard)();
 }
 
@@ -518,7 +432,7 @@ function renderDashboard() {
   var greet = hr<12?'Good morning':hr<18?'Good afternoon':'Good evening';
 
   var h = '<div style="margin-bottom:24px">';
-  h += '<div style="font-family:var(--font-display);font-size:22px;font-weight:700">'+greet+', '+esc(u.name.split(' ')[0])+' \uD83D\uDC4B</div>';
+  h += '<div style="font-family:var(--font-display);font-size:22px;font-weight:700">'+greet+', '+esc(u.name.split(' ')[0])+' 👋</div>';
   h += '<div style="font-size:13px;color:var(--text2);margin-top:4px">' + new Date().toLocaleDateString('en',{weekday:'long',year:'numeric',month:'long',day:'numeric'}) + '</div>';
   h += '</div>';
 
@@ -535,14 +449,14 @@ function renderDashboard() {
   h += '<div class="card"><div class="card-header"><span class="card-title">Today\'s Shifts</span>' +
        '<button class="btn btn-xs btn-ghost" onclick="navigate(\'schedule\')">View all →</button></div><div style="padding:0 16px 16px">';
   if (!todayShifts.length) {
-    h += '<div class="empty-state" style="padding:24px 0"><div class="empty-icon">\uD83D\uDCC5</div><div class="empty-title">No shifts today</div></div>';
+    h += '<div class="empty-state" style="padding:24px 0"><div class="empty-icon">📅</div><div class="empty-title">No shifts today</div></div>';
   } else {
     todayShifts.forEach(function(s) {
       var emp = getUser(s.employeeId); if (!emp) return;
       h += '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">';
       h += '<div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
       h += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(emp.name)+'</div>';
-      h += '<div style="font-size:12px;color:var(--text2)">'+fmtRange(s.startTime,s.endTime)+(s.position?' · '+esc(s.position):'')+'</div></div>';
+      h += '<div style="font-size:12px;color:var(--text2)">'+esc(s.startTime)+' – '+esc(s.endTime)+(s.position?' · '+esc(s.position):'')+'</div></div>';
       h += '<span class="badge badge-active">On shift</span></div>';
     });
   }
@@ -552,7 +466,7 @@ function renderDashboard() {
   h += '<div class="card"><div class="card-header"><span class="card-title">Active Swaps</span>' +
        '<button class="btn btn-xs btn-ghost" onclick="navigate(\'swaps\')">View all →</button></div><div style="padding:0 16px 16px">';
   if (!mySwaps.length) {
-    h += '<div class="empty-state" style="padding:24px 0"><div class="empty-icon">\uD83D\uDD04</div><div class="empty-title">No active swaps</div></div>';
+    h += '<div class="empty-state" style="padding:24px 0"><div class="empty-icon">🔄</div><div class="empty-title">No active swaps</div></div>';
   } else {
     mySwaps.slice(0,4).forEach(function(sw) {
       var req = getUser(sw.requesterId); if (!req) return;
@@ -560,7 +474,7 @@ function renderDashboard() {
       h += '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">';
       h += '<div class="avatar avatar-sm" style="background:'+esc(req.avatarColor)+'">'+esc(initials(req.name))+'</div>';
       h += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(req.name)+'</div>';
-      h += '<div style="font-size:12px;color:var(--text2)">'+esc(rs.date)+' · '+fmtRange(rs.startTime,rs.endTime)+'</div></div>';
+      h += '<div style="font-size:12px;color:var(--text2)">'+esc(rs.date)+' · '+esc(rs.startTime)+'–'+esc(rs.endTime)+'</div></div>';
       h += '<span class="badge badge-'+sw.status.toLowerCase()+'">'+sw.status.charAt(0)+sw.status.slice(1).toLowerCase()+'</span></div>';
     });
   }
@@ -662,10 +576,9 @@ function renderWeekView() {
       var top    = Math.max(0, startM*(SH/60));
       var height = Math.max(20, (endM-startM)*(SH/60)-2);
       var cls    = 'color-'+(s.colorTag||'indigo');
-      var onTO_wk = isOnApprovedTimeOff(s.employeeId, ds);
-      h += '<div class="shift-block '+cls+'"'+(onTO_wk?' style="top:'+top+'px;height:'+height+'px;opacity:.4" title="Employee on approved time off"':' style="top:'+top+'px;height:'+height+'px"')+' data-id="'+s.id+'" onclick="viewShift(this)">';
+      h += '<div class="shift-block '+cls+'" style="top:'+top+'px;height:'+height+'px" data-id="'+s.id+'" onclick="viewShift(this)">';
       h += '<div class="shift-name">'+(isMgr&&emp?esc(emp.name):esc(s.position||'Shift'))+'</div>';
-      h += '<div class="shift-time">'+fmtRange(s.startTime,s.endTime)+'</div>';
+      h += '<div class="shift-time">'+esc(s.startTime)+'–'+esc(s.endTime)+'</div>';
       h += '</div>';
     });
     h += '</div>';
@@ -689,21 +602,19 @@ function renderListView() {
     ds.forEach(function(s) {
       var emp = getUser(s.employeeId); if(!emp) return;
       var pill = COLOR_HEX[s.colorTag||'indigo']||'#6366f1';
-      var onTO_ls = isOnApprovedTimeOff(s.employeeId, d);
-      h += '<div class="list-shift-row'+(onTO_ls?' list-shift-row-warning':'')+'" data-id="'+s.id+'" onclick="viewShift(this)">';
+      h += '<div class="list-shift-row" data-id="'+s.id+'" onclick="viewShift(this)">';
       h += '<div class="shift-pill" style="background:'+pill+'"></div>';
       if (isMgr) h += '<div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+';flex-shrink:0">'+esc(initials(emp.name))+'</div>';
-      h += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">'+(isMgr?esc(emp.name)+' · ':'')+fmtRange(s.startTime,s.endTime)+'</div>';
+      h += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">'+(isMgr?esc(emp.name)+' · ':'')+esc(s.startTime)+' – '+esc(s.endTime)+'</div>';
       if (s.position) h += '<div style="font-size:12px;color:var(--text2)">'+esc(s.position)+'</div>';
       if (s.notes)    h += '<div style="font-size:11px;color:var(--text3)">'+esc(s.notes)+'</div>';
-      if (onTO_ls)    h += '<div style="font-size:11px;color:var(--amber)">⚠ Employee has approved time off this day</div>';
       h += '</div>';
       if (isMgr) h += '<button class="btn btn-xs btn-ghost" data-id="'+s.id+'" onclick="editShiftBtn(event,this)">Edit</button>';
       h += '</div>';
     });
     h += '</div>';
   });
-  if (!hasAny) h += '<div class="empty-state"><div class="empty-icon">\uD83D\uDCC5</div><div class="empty-title">No shifts this week</div><div class="empty-sub">Navigate to another week or add new shifts</div></div>';
+  if (!hasAny) h += '<div class="empty-state"><div class="empty-icon">📅</div><div class="empty-title">No shifts this week</div><div class="empty-sub">Navigate to another week or add new shifts</div></div>';
   h += '</div>';
   return h;
 }
@@ -739,7 +650,7 @@ function renderSwaps() {
   h += '</div>';
 
   if (!shown.length) {
-    h += '<div class="empty-state"><div class="empty-icon">\uD83D\uDD04</div><div class="empty-title">No swap requests</div><div class="empty-sub">Swap requests matching this filter will appear here</div></div>';
+    h += '<div class="empty-state"><div class="empty-icon">🔄</div><div class="empty-title">No swap requests</div><div class="empty-sub">Swap requests matching this filter will appear here</div></div>';
   } else {
     shown.forEach(function(sw){ h += renderSwapCard(sw); });
   }
@@ -772,20 +683,20 @@ function renderSwapCard(sw) {
   h += '<div class="swap-shifts">';
   h += '<div class="swap-shift-box"><div class="swap-shift-label">Requester\'s shift</div>';
   h += '<div class="swap-shift-date">'+fmtDateLabel(rs.date)+'</div>';
-  h += '<div class="swap-shift-time">'+fmtRange(rs.startTime,rs.endTime)+(rs.position?' · '+esc(rs.position):'')+'</div></div>';
+  h += '<div class="swap-shift-time">'+esc(rs.startTime)+' – '+esc(rs.endTime)+(rs.position?' · '+esc(rs.position):'')+'</div></div>';
   h += '<div class="swap-arrow">⇄</div>';
   if (recS) {
     h += '<div class="swap-shift-box"><div class="swap-shift-label">Swap with</div>';
     h += '<div class="swap-shift-date">'+fmtDateLabel(recS.date)+'</div>';
-    h += '<div class="swap-shift-time">'+fmtRange(recS.startTime,recS.endTime)+(recS.position?' · '+esc(recS.position):'')+'</div></div>';
+    h += '<div class="swap-shift-time">'+esc(recS.startTime)+' – '+esc(recS.endTime)+(recS.position?' · '+esc(recS.position):'')+'</div></div>';
   } else {
     h += '<div class="swap-shift-box" style="border-style:dashed"><div class="swap-shift-label">Open swap</div>';
     h += '<div style="font-size:12px;color:var(--text3);margin-top:4px">'+(rec?'With '+esc(rec.name):'Any employee')+'</div></div>';
   }
   h += '</div>';
 
-  if (sw.message)   h += '<div class="swap-message">\uD83D\uDCAC '+esc(sw.message)+'</div>';
-  if (sw.adminNotes)h += '<div class="swap-message" style="background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.15);color:var(--amber)">\uD83D\uDCCB '+esc(sw.adminNotes)+'</div>';
+  if (sw.message)   h += '<div class="swap-message">💬 '+esc(sw.message)+'</div>';
+  if (sw.adminNotes)h += '<div class="swap-message" style="background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.15);color:var(--amber)">📋 '+esc(sw.adminNotes)+'</div>';
 
   // Actions
   h += '<div class="swap-actions">';
@@ -815,7 +726,7 @@ function cancelSwapBtn(el)  {
 
 // ─── ADMIN ──────────────────────────────────────────────────────────
 function renderAdmin() {
-  if (!isAdminOrMgr()) return '<div class="empty-state"><div class="empty-icon">\uD83D\uDD12</div><div class="empty-title">Access restricted</div><div class="empty-sub">Admins and managers only</div></div>';
+  if (!isAdminOrMgr()) return '<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-title">Access restricted</div><div class="empty-sub">Admins and managers only</div></div>';
   var tabs = [{id:'users',label:'Users'},{id:'swaps',label:'Swap Queue'},{id:'audit',label:'Audit Log'}];
   var h = '<div class="admin-tabs">';
   tabs.forEach(function(t){ h += '<button class="admin-tab'+(state.adminTab===t.id?' active':'')+'" data-tab="'+t.id+'" onclick="setAdminTab(this)">'+t.label+'</button>'; });
@@ -897,7 +808,7 @@ function renderAuditLog() {
   var log = DB.auditLog.slice().reverse().slice(0,60);
   var h = '<div class="section-header"><div class="section-title">Audit Log</div><div style="font-size:13px;color:var(--text2)">Last '+log.length+' actions</div></div>';
   if (!log.length) {
-    return h + '<div class="empty-state"><div class="empty-icon">\uD83D\uDCCB</div><div class="empty-title">No activity yet</div></div>';
+    return h + '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No activity yet</div></div>';
   }
   h += '<div class="card card-p">';
   log.forEach(function(entry) {
@@ -1051,12 +962,8 @@ function renderModal() {
     'request-swap': function(){ return renderRequestSwapModal(m.data.shiftId); },
     'respond-swap': function(){ return renderRespondSwapModal(m.data.id, m.data.action); },
     'review-swap':  function(){ return renderReviewSwapModal(m.data.id, m.data.action); },
-    'create-user':       renderCreateUserModal,
-    'edit-user':         function(){ return renderEditUserModal(m.data.id); },
-    'edit-availability': renderEditAvailabilityModal,
-    'reject-avail':      function(){ return renderRejectAvailModal(m.data.id); },
-    'create-timeoff':    renderCreateTimeOffModal,
-    'reject-timeoff':    function(){ return renderRejectTimeOffModal(m.data.id); },
+    'create-user':  renderCreateUserModal,
+    'edit-user':    function(){ return renderEditUserModal(m.data.id); },
   };
   return (fns[m.type]||function(){return '';})();
 }
@@ -1098,15 +1005,11 @@ function createShift() {
   if (!start || !end)    { toast('Start and end times are required.','error');        return; }
   if (timeToMins(end) <= timeToMins(start)) { toast('End time must be after start time.','error'); return; }
   if (hasConflict(empId, date, start, end, null)) { toast('Conflict: this employee already has an overlapping shift.','error'); return; }
-  // v3: time-off block check
-  if (isOnApprovedTimeOff(empId, date)) {
-    if (!confirm('⚠️ This employee has approved time off on '+date+'. Schedule them anyway?')) return;
-  }
   var shift = { id:nextId('s'), employeeId:empId, createdById:state.currentUser.id,
                 date:date, startTime:start, endTime:end, position:pos, notes:notes, colorTag:color,
                 createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
   DB.shifts.push(shift);
-  addNotif(empId,'Shift Assigned','New shift on '+date+' from '+fmt12(start)+' to '+fmt12(end)+(pos?' ('+pos+')':'')+'.',' shift');
+  addNotif(empId,'Shift Assigned','New shift on '+date+' from '+start+' to '+end+(pos?' ('+pos+')':'')+'.',' shift');
   DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'SHIFT_CREATED',entityType:'Shift',entityId:shift.id,createdAt:new Date().toISOString()});
   toast('Shift created.','success'); closeModal();
 }
@@ -1183,14 +1086,12 @@ function renderViewShiftModal(id) {
     body += '<div><div style="font-weight:700">'+esc(emp.name)+'</div><div style="font-size:12px;opacity:.7">'+esc(emp.email)+'</div></div></div>';
   }
   body += '<div style="font-size:15px;font-weight:700">'+fmtDateLabel(s.date)+'</div>';
-  body += '<div style="font-size:14px;margin-top:4px">'+fmtRange(s.startTime,s.endTime)+'</div>';
+  body += '<div style="font-size:14px;margin-top:4px">'+esc(s.startTime)+' → '+esc(s.endTime)+'</div>';
   if (s.position) body += '<div style="font-size:13px;margin-top:4px;opacity:.8">'+esc(s.position)+'</div>';
-  if (s.notes)    body += '<div style="font-size:12px;margin-top:8px;opacity:.7">\uD83D\uDCDD '+esc(s.notes)+'</div>';
+  if (s.notes)    body += '<div style="font-size:12px;margin-top:8px;opacity:.7">📝 '+esc(s.notes)+'</div>';
   body += '</div>';
 
-  var onTO_vs = isOnApprovedTimeOff(s.employeeId, s.date);
   if (isPast)    body += '<div style="font-size:12px;color:var(--text3);margin-bottom:14px">⏰ This shift is in the past.</div>';
-  if (onTO_vs)   body += '<div style="font-size:12px;color:var(--red);background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.15);border-radius:8px;padding:10px;margin-bottom:14px">⛔ Employee has approved time off on this date.</div>';
   if (hasSwap)   body += '<div style="font-size:12px;color:var(--amber);background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.15);border-radius:8px;padding:10px;margin-bottom:14px">⚠️ This shift has an active swap request.</div>';
 
   body += '<div class="modal-actions" style="flex-wrap:wrap">';
@@ -1217,7 +1118,7 @@ function renderRequestSwapModal(shiftId) {
   body += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px">Your shift</div>';
   body += '<div class="'+cls+'" style="border-radius:8px;padding:12px;border:1px solid rgba(255,255,255,.06)">';
   body += '<div style="font-weight:600">'+fmtDateLabel(shift.date)+'</div>';
-  body += '<div style="font-size:13px;opacity:.8">'+fmtRange(shift.startTime,shift.endTime)+(shift.position?' · '+esc(shift.position):'')+'</div>';
+  body += '<div style="font-size:13px;opacity:.8">'+esc(shift.startTime)+' – '+esc(shift.endTime)+(shift.position?' · '+esc(shift.position):'')+'</div>';
   body += '</div></div>';
   body += '<div class="form-group"><label>Swap with (optional — leave blank for open request)</label>';
   body += '<select id="swEmp">'+empOpts+'</select></div>';
@@ -1270,7 +1171,7 @@ function renderRespondSwapModal(swapId, defaultAction) {
   body += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px">Shift being swapped</div>';
   body += '<div class="color-'+(rs.colorTag||'indigo')+'" style="border-radius:8px;padding:12px;border:1px solid rgba(255,255,255,.06)">';
   body += '<div style="font-weight:600">'+fmtDateLabel(rs.date)+'</div>';
-  body += '<div style="font-size:13px;opacity:.8">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
+  body += '<div style="font-size:13px;opacity:.8">'+esc(rs.startTime)+' – '+esc(rs.endTime)+'</div>';
   body += '<div style="font-size:12px;margin-top:4px;opacity:.7">Requested by '+esc(req.name)+(sw.message?' · "'+esc(sw.message)+'"':'')+'</div>';
   body += '</div></div>';
   // FIX: action stored in a hidden input; buttons toggle it and update their own classes via id
@@ -1336,13 +1237,13 @@ function renderReviewSwapModal(swapId, defaultAction) {
   body += '</div>';
 
   body += '<div style="display:grid;grid-template-columns:1fr 32px 1fr;gap:8px;align-items:center;margin-bottom:16px">';
-  if (rs) { body += '<div class="swap-shift-box"><div class="swap-shift-label">Requester\'s shift</div><div class="swap-shift-date">'+fmtDateLabel(rs.date)+'</div><div class="swap-shift-time">'+fmtRange(rs.startTime,rs.endTime)+'</div></div>'; }
+  if (rs) { body += '<div class="swap-shift-box"><div class="swap-shift-label">Requester\'s shift</div><div class="swap-shift-date">'+fmtDateLabel(rs.date)+'</div><div class="swap-shift-time">'+esc(rs.startTime)+' – '+esc(rs.endTime)+'</div></div>'; }
   body += '<div style="text-align:center;color:var(--text3);font-size:18px">⇄</div>';
-  if (recS) { body += '<div class="swap-shift-box"><div class="swap-shift-label">Swap with</div><div class="swap-shift-date">'+fmtDateLabel(recS.date)+'</div><div class="swap-shift-time">'+fmtRange(recS.startTime,recS.endTime)+'</div></div>'; }
+  if (recS) { body += '<div class="swap-shift-box"><div class="swap-shift-label">Swap with</div><div class="swap-shift-date">'+fmtDateLabel(recS.date)+'</div><div class="swap-shift-time">'+esc(recS.startTime)+' – '+esc(recS.endTime)+'</div></div>'; }
   else       { body += '<div class="swap-shift-box" style="border-style:dashed"><div class="swap-shift-label">No specific shift</div><div style="font-size:12px;color:var(--text3);margin-top:4px">'+(rec?'With '+esc(rec.name):'Open swap')+'</div></div>'; }
   body += '</div>';
 
-  if (sw.message) body += '<div class="swap-message" style="margin-bottom:16px">\uD83D\uDCAC '+esc(sw.message)+'</div>';
+  if (sw.message) body += '<div class="swap-message" style="margin-bottom:16px">💬 '+esc(sw.message)+'</div>';
 
   body += '<div class="form-group"><label>Decision</label>';
   body += '<div style="display:flex;gap:8px;margin-top:4px">';
@@ -1455,315 +1356,6 @@ function updateUser(id) {
   toast('User updated.','success'); closeModal();
 }
 
-
-// =================================================================
-// v3 NEW: AVAILABILITY PAGE
-// =================================================================
-var WEEK_DAYS_AV = [
-  {idx:1,label:'Monday'},{idx:2,label:'Tuesday'},{idx:3,label:'Wednesday'},
-  {idx:4,label:'Thursday'},{idx:5,label:'Friday'},{idx:6,label:'Saturday'},{idx:0,label:'Sunday'}
-];
-
-function renderAvailability() {
-  if (isAdminOrMgr()) return renderAvailabilityAdmin();
-  return renderAvailabilityEmployee();
-}
-function renderAvailabilityEmployee() {
-  var u = state.currentUser;
-  var myAvail = getUserAvailability(u.id);
-  var myReqs = DB.availabilityRequests.filter(function(r){return r.userId===u.id;}).slice().reverse();
-  var hasPending = myReqs.some(function(r){return r.status==='PENDING';});
-  var h = '<div style="max-width:700px">';
-  h += '<div class="section-header"><div><div class="section-title">My Weekly Availability</div>';
-  h += '<div style="font-size:13px;color:var(--text2);margin-top:2px">Your recurring weekly schedule availability</div></div>';
-  if (!hasPending) h += '<button class="btn btn-primary" onclick="openModal(\'edit-availability\',{})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Request Change</button>';
-  else h += '<span class="badge badge-pending">Change request pending</span>';
-  h += '</div>';
-  h += '<div class="card" style="margin-bottom:20px"><div class="card-header"><span class="card-title">Current Availability</span><span style="font-size:12px;color:var(--text2)">Recurring weekly</span></div>';
-  h += '<div style="padding:16px;display:grid;grid-template-columns:repeat(7,1fr);gap:8px">';
-  WEEK_DAYS_AV.forEach(function(wd){
-    var rec = myAvail.find(function(a){return a.dayOfWeek===wd.idx;})||{isAvailable:false,startTime:'09:00',endTime:'17:00'};
-    h += '<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px 4px">';
-    h += '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">'+wd.label.slice(0,3)+'</div>';
-    if (rec.isAvailable) h += '<div style="font-size:9px;color:var(--green);line-height:1.6">'+fmt12(rec.startTime)+'<br>'+fmt12(rec.endTime)+'</div>';
-    else h += '<div style="font-size:12px;color:var(--text3);font-weight:500">Off</div>';
-    h += '</div>';
-  });
-  h += '</div></div>';
-  if (myReqs.length) {
-    h += '<div style="font-family:var(--font-display);font-weight:600;font-size:15px;margin-bottom:14px">Change Requests</div>';
-    myReqs.slice(0,5).forEach(function(r){
-      h += '<div class="avail-req-card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">';
-      h += '<div style="font-size:13px;font-weight:600;color:var(--text)">Availability Change Request</div>';
-      h += '<span class="badge badge-'+r.status+'">'+r.status.charAt(0)+r.status.slice(1).toLowerCase()+'</span></div>';
-      if (r.notes) h += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">'+esc(r.notes)+'</div>';
-      h += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">';
-      WEEK_DAYS_AV.forEach(function(wd){
-        var pa = r.proposedAvailability.find(function(a){return a.dayOfWeek===wd.idx;});
-        h += '<div style="text-align:center;background:var(--bg3);border-radius:6px;padding:6px 2px">';
-        h += '<div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:3px">'+wd.label.slice(0,3).toUpperCase()+'</div>';
-        if (pa&&pa.isAvailable) h += '<div style="font-size:9px;color:var(--green)">'+fmt12(pa.startTime)+'<br>'+fmt12(pa.endTime)+'</div>';
-        else h += '<div style="font-size:10px;color:var(--red)">Off</div>';
-        h += '</div>';
-      });
-      h += '</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Submitted '+relTime(r.createdAt)+(r.reviewedAt?' - Reviewed '+relTime(r.reviewedAt):'')+'</div></div>';
-    });
-  }
-  h += '</div>'; return h;
-}
-function renderAvailabilityAdmin() {
-  var pendingCnt = DB.availabilityRequests.filter(function(r){return r.status==='PENDING';}).length;
-  var tabs = [{id:'overview',label:'Team Overview'},{id:'requests',label:'Change Requests'+(pendingCnt>0?' ('+pendingCnt+')':'')}];
-  var curTab = state.availTab||'overview';
-  var h = '<div class="admin-tabs">';
-  tabs.forEach(function(t){h+='<button class="admin-tab'+(curTab===t.id?' active':'')+'" data-tab="'+t.id+'" onclick="setAvailTab(this)">'+t.label+'</button>';});
-  h += '</div>';
-  return h + (curTab==='overview' ? renderAvailOverview() : renderAvailRequests());
-}
-function setAvailTab(el){state.availTab=el.getAttribute('data-tab')||'overview';render();}
-function renderAvailOverview() {
-  var employees = DB.users.filter(function(u){return u.status==='ACTIVE'&&u.role==='EMPLOYEE';});
-  var h = '<div class="section-header"><div class="section-title">Team Weekly Availability</div></div>';
-  if (!employees.length) return h+'<div class="empty-state"><div class="empty-icon">No employees</div></div>';
-  employees.forEach(function(emp){
-    var avail = getUserAvailability(emp.id);
-    h += '<div class="card" style="margin-bottom:16px"><div class="card-header">';
-    h += '<div style="display:flex;align-items:center;gap:10px"><div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
-    h += '<div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div><div style="font-size:12px;color:var(--text2)">'+esc(emp.department||'No dept')+'</div></div></div></div>';
-    h += '<div style="padding:12px 16px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px">';
-    WEEK_DAYS_AV.forEach(function(wd){
-      var rec = avail.find(function(a){return a.dayOfWeek===wd.idx;});
-      h += '<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:8px 4px">';
-      h += '<div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:4px">'+wd.label.slice(0,3).toUpperCase()+'</div>';
-      if (rec&&rec.isAvailable) h += '<div style="font-size:9px;color:var(--green);line-height:1.5">'+fmt12(rec.startTime)+'<br>'+fmt12(rec.endTime)+'</div>';
-      else h += '<div style="font-size:10px;color:var(--text3)">Off</div>';
-      h += '</div>';
-    });
-    h += '</div></div>';
-  });
-  return h;
-}
-function renderAvailRequests() {
-  var reqs = DB.availabilityRequests.slice().reverse();
-  var h = '<div class="section-header"><div class="section-title">Availability Change Requests</div></div>';
-  if (!reqs.length) return h+'<div class="empty-state"><div class="empty-icon">No requests</div></div>';
-  reqs.forEach(function(r){
-    var emp = getUser(r.userId); if(!emp)return;
-    var cur = getUserAvailability(r.userId);
-    h += '<div class="avail-req-card">';
-    h += '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">';
-    h += '<div style="display:flex;align-items:center;gap:10px"><div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
-    h += '<div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div><div class="swap-meta">'+relTime(r.createdAt)+'</div></div></div>';
-    h += '<span class="badge badge-'+r.status+'">'+r.status.charAt(0)+r.status.slice(1).toLowerCase()+'</span></div>';
-    if (r.notes) h += '<div class="swap-message" style="margin-bottom:12px">'+esc(r.notes)+'</div>';
-    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">';
-    h += '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Current</div>';
-    h += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">';
-    WEEK_DAYS_AV.forEach(function(wd){
-      var ca = cur.find(function(a){return a.dayOfWeek===wd.idx;});
-      h += '<div style="text-align:center;background:var(--bg3);border-radius:5px;padding:5px 2px">';
-      h += '<div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:2px">'+wd.label.slice(0,2)+'</div>';
-      h += (ca&&ca.isAvailable?'<div style="font-size:8px;color:var(--green)">Y</div>':'<div style="font-size:8px;color:var(--text3)">N</div>');
-      h += '</div>';
-    });
-    h += '</div></div>';
-    h += '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Proposed</div>';
-    h += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">';
-    WEEK_DAYS_AV.forEach(function(wd){
-      var pa = r.proposedAvailability.find(function(a){return a.dayOfWeek===wd.idx;});
-      var ca = cur.find(function(a){return a.dayOfWeek===wd.idx;});
-      var changed = pa&&ca&&pa.isAvailable!==ca.isAvailable;
-      h += '<div style="text-align:center;border-radius:5px;padding:5px 2px;background:'+(changed?'rgba(99,102,241,.15)':'var(--bg3)')+'">';
-      h += '<div style="font-size:9px;font-weight:700;color:'+(changed?'var(--brand2)':'var(--text3)')+';margin-bottom:2px">'+wd.label.slice(0,2)+'</div>';
-      h += (pa&&pa.isAvailable?'<div style="font-size:8px;color:var(--green)">Y</div>':'<div style="font-size:8px;color:var(--text3)">N</div>');
-      h += '</div>';
-    });
-    h += '</div></div></div>';
-    if (r.status==='PENDING') {
-      h += '<div class="swap-actions">';
-      h += '<button class="btn btn-success btn-sm" data-id="'+r.id+'" onclick="approveAvailReq(this)">Approve</button>';
-      h += '<button class="btn btn-danger btn-sm" data-id="'+r.id+'" onclick="openModal(\'reject-avail\',{id:\''+r.id+'\'})">Reject</button>';
-      h += '</div>';
-    }
-    h += '</div>';
-  });
-  return h;
-}
-function approveAvailReq(el) {
-  var id=el.getAttribute('data-id');var r=getAvReq(id);if(!r)return;
-  r.proposedAvailability.forEach(function(pa){
-    var ex=DB.availability.find(function(a){return a.userId===r.userId&&a.dayOfWeek===pa.dayOfWeek;});
-    if(ex){ex.isAvailable=pa.isAvailable;ex.startTime=pa.startTime;ex.endTime=pa.endTime;}
-    else{DB.availability.push({id:nextId('av'),userId:r.userId,dayOfWeek:pa.dayOfWeek,startTime:pa.startTime,endTime:pa.endTime,isAvailable:pa.isAvailable});}
-  });
-  r.status='APPROVED';r.reviewedBy=state.currentUser.id;r.reviewedAt=now();r.updatedAt=now();
-  addNotif(r.userId,'Availability Approved','Your availability change request has been approved.','info');
-  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'AVAILABILITY_APPROVED',entityType:'AvailabilityRequest',entityId:id,createdAt:now()});
-  toast('Availability change approved.','success');render();
-}
-function renderEditAvailabilityModal() {
-  var u=state.currentUser;var current=getUserAvailability(u.id);
-  var body='<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Set your preferred recurring weekly availability. A manager will review before changes take effect.</p>';
-  body+='<div class="form-group"><label>Reason / Notes (optional)</label><textarea id="availNotes" placeholder="Explain why you\'re requesting this change..."></textarea></div>';
-  body+='<div style="margin-bottom:16px">';
-  WEEK_DAYS_AV.forEach(function(wd){
-    var rec=current.find(function(a){return a.dayOfWeek===wd.idx;})||{isAvailable:false,startTime:'09:00',endTime:'17:00'};
-    body+='<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">';
-    body+='<div style="width:90px;font-size:13px;font-weight:600;color:var(--text)">'+wd.label+'</div>';
-    body+='<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;color:var(--text2)"><input type="checkbox" id="avail-chk-'+wd.idx+'" '+(rec.isAvailable?'checked':'')+' onchange="availToggle('+wd.idx+')"> Available</label>';
-    body+='<div id="avail-times-'+wd.idx+'" style="display:'+(rec.isAvailable?'flex':'none')+';gap:8px;align-items:center;margin-left:auto">';
-    body+='<input type="time" id="avail-st-'+wd.idx+'" value="'+rec.startTime+'" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:4px 8px;font-size:12px">';
-    body+='<span style="color:var(--text3);font-size:12px">to</span>';
-    body+='<input type="time" id="avail-et-'+wd.idx+'" value="'+rec.endTime+'" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:4px 8px;font-size:12px">';
-    body+='</div></div>';
-  });
-  body+='</div>';
-  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitAvailRequest()">Submit Request</button></div>';
-  return modalWrap('Request Availability Change',body);
-}
-function availToggle(dayIdx){var chk=document.getElementById('avail-chk-'+dayIdx);var t=document.getElementById('avail-times-'+dayIdx);if(t)t.style.display=(chk&&chk.checked)?'flex':'none';}
-function submitAvailRequest(){
-  var u=state.currentUser;var notes=((document.getElementById('availNotes')||{}).value||'').trim();
-  var hasPending=DB.availabilityRequests.some(function(r){return r.userId===u.id&&r.status==='PENDING';});
-  if(hasPending){toast('You already have a pending availability request.','error');return;}
-  var proposed=[];var valid=true;
-  WEEK_DAYS_AV.forEach(function(wd){
-    var chk=document.getElementById('avail-chk-'+wd.idx);var st=document.getElementById('avail-st-'+wd.idx);var et=document.getElementById('avail-et-'+wd.idx);
-    var avail=chk&&chk.checked;var start=(st&&st.value)||'09:00';var end=(et&&et.value)||'17:00';
-    if(avail&&timeToMins(end)<=timeToMins(start)){toast('End time must be after start for '+wd.label,'error');valid=false;return;}
-    proposed.push({dayOfWeek:wd.idx,startTime:start,endTime:end,isAvailable:avail});
-  });
-  if(!valid||proposed.length!==7)return;
-  var req={id:nextId('avr'),userId:u.id,status:'PENDING',proposedAvailability:proposed,notes:notes,reviewedBy:null,reviewedAt:null,createdAt:now(),updatedAt:now()};
-  DB.availabilityRequests.push(req);
-  DB.users.filter(function(x){return x.role==='ADMIN'||x.role==='MANAGER';}).forEach(function(mgr){addNotif(mgr.id,'Availability Request',u.name+' submitted an availability change request.','info');});
-  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'AVAILABILITY_REQUEST_SUBMITTED',entityType:'AvailabilityRequest',entityId:req.id,createdAt:now()});
-  toast('Availability change request submitted.','success');closeModal();
-}
-function renderRejectAvailModal(id){
-  var r=getAvReq(id);var emp=r?getUser(r.userId):null;if(!r||!emp)return'';
-  var body='<div style="background:var(--bg3);border-radius:10px;padding:14px;margin-bottom:16px">';
-  body+='<div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'\'s availability request</div>';
-  body+='<div style="font-size:12px;color:var(--text2);margin-top:4px">'+(r.notes?esc(r.notes):'No notes provided')+'</div></div>';
-  body+='<div class="form-group"><label>Reason for Rejection</label><textarea id="rejectAvailNotes" placeholder="Explain why this request is being rejected..."></textarea></div>';
-  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-danger" data-id="'+id+'" onclick="rejectAvailReqSubmit(this)">Reject Request</button></div>';
-  return modalWrap('Reject Availability Request',body);
-}
-function rejectAvailReqSubmit(btn){
-  var id=btn.getAttribute('data-id');var r=getAvReq(id);if(!r)return;
-  var notes=((document.getElementById('rejectAvailNotes')||{}).value||'').trim();
-  r.status='REJECTED';r.reviewedBy=state.currentUser.id;r.reviewedAt=now();r.updatedAt=now();r.adminNotes=notes;
-  addNotif(r.userId,'Availability Request Rejected','Your availability change was not approved.'+(notes?' Reason: '+notes:''),'info');
-  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'AVAILABILITY_REJECTED',entityType:'AvailabilityRequest',entityId:id,createdAt:now()});
-  toast('Request rejected.','info');closeModal();
-}
-
-// =================================================================
-// v3 NEW: TIME OFF PAGE
-// =================================================================
-function renderTimeOff(){return isAdminOrMgr()?renderTimeOffAdmin():renderTimeOffEmployee();}
-function renderTimeOffEmployee(){
-  var u=state.currentUser;var myReqs=DB.timeOffRequests.filter(function(r){return r.userId===u.id;}).slice().reverse();
-  var h='<div style="max-width:700px"><div class="section-header"><div><div class="section-title">My Time Off Requests</div>';
-  h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">Sick days and unpaid leave</div></div></div>';
-  if(!myReqs.length)h+='<div class="empty-state"><div class="empty-icon">No time-off requests yet</div><div class="empty-sub">Use the button above to submit a request</div></div>';
-  else myReqs.forEach(function(r){h+=renderTimeOffCard(r,false);});
-  h+='</div>';return h;
-}
-function renderTimeOffAdmin(){
-  var pendCnt=DB.timeOffRequests.filter(function(r){return r.status==='PENDING';}).length;
-  var tabs=[{id:'all',label:'All Requests'},{id:'pending',label:'Pending ('+pendCnt+')'}];
-  var curTab=state.timeoffTab||'all';
-  var h='<div class="admin-tabs">';
-  tabs.forEach(function(t){h+='<button class="admin-tab'+(curTab===t.id?' active':'')+'" data-tab="'+t.id+'" onclick="setTimeoffTab(this)">'+t.label+'</button>';});
-  h+='</div>';
-  var reqs=DB.timeOffRequests.slice().reverse();
-  if(curTab==='pending')reqs=reqs.filter(function(r){return r.status==='PENDING';});
-  if(!reqs.length){h+='<div class="empty-state"><div class="empty-title">No requests</div></div>';return h;}
-  reqs.forEach(function(r){h+=renderTimeOffCard(r,true);});
-  return h;
-}
-function setTimeoffTab(el){state.timeoffTab=el.getAttribute('data-tab')||'all';render();}
-function renderTimeOffCard(r,adminView){
-  var emp=getUser(r.userId);var d1=new Date(r.startDate+'T00:00:00');var d2=new Date(r.endDate+'T00:00:00');
-  var days=Math.round((d2-d1)/864e5)+1;
-  var h='<div class="timeoff-card">';
-  if(adminView&&emp){h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div><div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div><div style="font-size:12px;color:var(--text2)">'+esc(emp.department||'')+'</div></div></div>';}
-  h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px">';
-  h+='<div><div style="font-size:15px;font-weight:700;color:var(--text)">'+fmtDateLabel(r.startDate)+(r.startDate!==r.endDate?' to '+fmtDateLabel(r.endDate):'')+'</div>';
-  h+='<div style="font-size:12px;color:var(--text2);margin-top:3px">'+days+' day'+(days!==1?'s':'')+' - <span style="text-transform:capitalize;color:'+(r.type==='sick'?'var(--amber)':'var(--text2)')+'">'+esc(r.type)+'</span></div></div>';
-  h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0)+r.status.slice(1).toLowerCase()+'</span></div>';
-  if(r.notes)h+='<div class="swap-message">'+esc(r.notes)+'</div>';
-  h+='<div style="font-size:11px;color:var(--text3);margin-top:8px">Submitted '+relTime(r.submittedAt)+' - Signed: <em>'+esc(r.digitalSignatureName)+'</em></div>';
-  if(r.adminNotes)h+='<div class="swap-message" style="margin-top:8px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.15);color:var(--amber)">'+esc(r.adminNotes)+'</div>';
-  if(adminView&&r.status==='PENDING'){h+='<div class="swap-actions" style="margin-top:12px"><button class="btn btn-success btn-sm" data-id="'+r.id+'" onclick="approveTimeOff(this)">Approve</button><button class="btn btn-danger btn-sm" data-id="'+r.id+'" onclick="openModal(\'reject-timeoff\',{id:\''+r.id+'\'})">Reject</button></div>';}
-  h+='</div>';return h;
-}
-function approveTimeOff(el){
-  var id=el.getAttribute('data-id');var r=getToReq(id);if(!r)return;
-  var blocked=DB.shifts.filter(function(s){return s.employeeId===r.userId&&s.date>=r.startDate&&s.date<=r.endDate;});
-  r.status='APPROVED';r.reviewedBy=state.currentUser.id;r.reviewedAt=now();r.updatedAt=now();
-  addNotif(r.userId,'Time Off Approved','Your time-off from '+r.startDate+' to '+r.endDate+' has been approved.','info');
-  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'TIMEOFF_APPROVED',entityType:'TimeOffRequest',entityId:id,createdAt:now()});
-  var msg='Time-off approved.';if(blocked.length)msg+=' Note: '+blocked.length+' shift(s) overlap this period.';
-  toast(msg,'success');render();
-}
-function renderCreateTimeOffModal(){
-  var u=state.currentUser;var today=todayStr();
-  var body='<div class="form-row"><div class="form-group"><label>Start Date *</label><input type="date" id="toStart" value="'+today+'" min="'+today+'"></div><div class="form-group"><label>End Date *</label><input type="date" id="toEnd" value="'+today+'" min="'+today+'"></div></div>';
-  body+='<div class="form-group"><label>Request Type *</label><div style="display:flex;gap:10px;margin-top:6px"><button id="toBtnSick" class="btn btn-amber" style="flex:1;justify-content:center" onclick="setTOType(\'sick\')">Sick</button><button id="toBtnUnpaid" class="btn btn-ghost" style="flex:1;justify-content:center" onclick="setTOType(\'unpaid\')">Unpaid</button></div><input type="hidden" id="toType" value="sick"></div>';
-  body+='<div class="form-group"><label>Notes (optional)</label><textarea id="toNotes" placeholder="Additional information about your request..."></textarea></div>';
-  body+='<div style="background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:14px;margin-bottom:16px">';
-  body+='<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Digital Signature Required</div>';
-  body+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px">By typing your full name, you confirm this request is accurate and submitted in good faith.</div>';
-  body+='<div class="form-group" style="margin-bottom:0"><label>Type your full legal name *</label><input id="toSig" placeholder="'+esc(u.name)+'" autocomplete="off"></div></div>';
-  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitTimeOff()">Submit Request</button></div>';
-  return modalWrap('Request Time Off',body);
-}
-function setTOType(type){
-  var inp=document.getElementById('toType');if(inp)inp.value=type;
-  var sick=document.getElementById('toBtnSick');var unpaid=document.getElementById('toBtnUnpaid');
-  if(sick){sick.className='btn '+(type==='sick'?'btn-amber':'btn-ghost');sick.style.cssText='flex:1;justify-content:center';}
-  if(unpaid){unpaid.className='btn '+(type==='unpaid'?'btn-brand':'btn-ghost');unpaid.style.cssText='flex:1;justify-content:center';}
-}
-function submitTimeOff(){
-  var u=state.currentUser;
-  var start=((document.getElementById('toStart')||{}).value||'').trim();
-  var end=((document.getElementById('toEnd')||{}).value||'').trim();
-  var type=(document.getElementById('toType')||{}).value||'sick';
-  var notes=((document.getElementById('toNotes')||{}).value||'').trim();
-  var sig=((document.getElementById('toSig')||{}).value||'').trim();
-  if(!start||!end){toast('Start and end dates are required.','error');return;}
-  if(end<start){toast('End date must be on or after start date.','error');return;}
-  if(!sig){toast('Digital signature (your full name) is required.','error');return;}
-  if(sig.toLowerCase()!==u.name.toLowerCase()){toast('Signature must match your full name: "'+u.name+'".','error');return;}
-  var overlap=DB.timeOffRequests.some(function(r){return r.userId===u.id&&r.status!=='REJECTED'&&r.status!=='CANCELLED'&&r.startDate<=end&&r.endDate>=start;});
-  if(overlap){toast('You already have a time-off request for an overlapping period.','error');return;}
-  var req={id:nextId('to'),userId:u.id,startDate:start,endDate:end,type:type,notes:notes,digitalSignatureName:sig,submittedAt:now(),status:'PENDING',reviewedBy:null,reviewedAt:null,adminNotes:'',createdAt:now(),updatedAt:now()};
-  DB.timeOffRequests.push(req);
-  DB.users.filter(function(x){return x.role==='ADMIN'||x.role==='MANAGER';}).forEach(function(mgr){addNotif(mgr.id,'Time-Off Request',u.name+' submitted a '+type+' time-off request ('+start+' to '+end+').','info');});
-  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'TIMEOFF_SUBMITTED',entityType:'TimeOffRequest',entityId:req.id,createdAt:now()});
-  toast('Time-off request submitted.','success');closeModal();
-}
-function renderRejectTimeOffModal(id){
-  var r=getToReq(id);var emp=r?getUser(r.userId):null;if(!r||!emp)return'';
-  var body='<div style="background:var(--bg3);border-radius:10px;padding:14px;margin-bottom:16px">';
-  body+='<div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'\'s request</div>';
-  body+='<div style="font-size:13px;color:var(--text2);margin-top:4px">'+fmtDateLabel(r.startDate)+' to '+fmtDateLabel(r.endDate)+' - '+esc(r.type)+'</div>';
-  if(r.notes)body+='<div style="font-size:12px;color:var(--text3);margin-top:4px">'+esc(r.notes)+'</div></div>';
-  body+='<div class="form-group"><label>Reason for Rejection</label><textarea id="rejectTONotes" placeholder="Explain why this request is being rejected..."></textarea></div>';
-  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-danger" data-id="'+id+'" onclick="rejectTimeOffSubmit(this)">Reject Request</button></div>';
-  return modalWrap('Reject Time-Off Request',body);
-}
-function rejectTimeOffSubmit(btn){
-  var id=btn.getAttribute('data-id');var r=getToReq(id);if(!r)return;
-  var notes=((document.getElementById('rejectTONotes')||{}).value||'').trim();
-  r.status='REJECTED';r.reviewedBy=state.currentUser.id;r.reviewedAt=now();r.updatedAt=now();r.adminNotes=notes;
-  addNotif(r.userId,'Time Off Rejected','Your time-off request was not approved.'+(notes?' Reason: '+notes:''),'info');
-  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'TIMEOFF_REJECTED',entityType:'TimeOffRequest',entityId:id,createdAt:now()});
-  toast('Time-off request rejected.','info');closeModal();
-}
-
 // ─── EXPOSE TO WINDOW ────────────────────────────────────────────────
 // Only functions called via inline onclick need to be on window.
 // All data-attribute handlers (viewShift, editShiftBtn, etc.) are also exposed.
@@ -1782,11 +1374,6 @@ var expose = [
   'filterUsers','setAdminTab',
   'toggleNotif','markAllRead','readNotifBtn',
   'saveProfile','savePassword',
-  // v3 NEW
-  'setAvailTab','approveAvailReq','rejectAvailReqSubmit',
-  'availToggle','submitAvailRequest',
-  'setTimeoffTab','approveTimeOff','rejectTimeOffSubmit',
-  'setTOType','submitTimeOff',
 ];
 var fns = { navigate:navigate, logout:logout, handleLogin:handleLogin, handleRegister:handleRegister,
   changeWeek:changeWeek, goToday:goToday, setView:setView, setSwapFilter:setSwapFilter,
@@ -1802,11 +1389,6 @@ var fns = { navigate:navigate, logout:logout, handleLogin:handleLogin, handleReg
   filterUsers:filterUsers, setAdminTab:setAdminTab,
   toggleNotif:toggleNotif, markAllRead:markAllRead, readNotifBtn:readNotifBtn,
   saveProfile:saveProfile, savePassword:savePassword,
-  // v3 NEW
-  setAvailTab:setAvailTab, approveAvailReq:approveAvailReq, rejectAvailReqSubmit:rejectAvailReqSubmit,
-  availToggle:availToggle, submitAvailRequest:submitAvailRequest,
-  setTimeoffTab:setTimeoffTab, approveTimeOff:approveTimeOff, rejectTimeOffSubmit:rejectTimeOffSubmit,
-  setTOType:setTOType, submitTimeOff:submitTimeOff,
 };
 expose.forEach(function(name){ window[name] = fns[name]; });
 
