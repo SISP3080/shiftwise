@@ -67,7 +67,26 @@ var DB = {
     openSwapsEnabled:true, swapApprovalRequired:true, swapExpiryDays:7,
     notifySwaps:true, notifyApprovals:true, notifySchedulePublish:true,
   },
+  // v7 attendance: track absence-only; presence is the default assumption
+  // [{id, shiftId, employeeId, date, status, reason, notes, markedById, markedAt}]
+  attendanceLog: [],
 };
+
+// ─── AUTO-EXPIRE OPEN SWAPS (3-day rule) ─────────────────────────
+function expireOpenSwaps(){
+  var THREE_DAYS=3*864e5;
+  DB.requests.forEach(function(r){
+    if(r.type!=='swap'||r.visibility!=='public'||r.status!=='pending') return;
+    if(Date.now()-new Date(r.createdAt).getTime()>=THREE_DAYS){
+      r.status='rejected';r.updatedAt=now();
+      addNotif(r.userId,'Open Swap Expired',
+        'Your open swap request expired after 3 days with no interest.',
+        'info','openswaps');
+      DB.auditLog.push({id:nextId('a'),userId:r.userId,
+        action:'OPEN_SWAP_EXPIRED',entityType:'Request',entityId:r.id,createdAt:now()});
+    }
+  });
+}
 
 // ─── REQUEST ENGINE HELPERS ────────────────────────────────────────
 function getReq(id){ return DB.requests.find(function(r){return r.id===id;}); }
@@ -108,7 +127,7 @@ function canSeeRequest(req, user) {
 
 // Are comments locked on this request?
 function commentsLocked(req) {
-  return req.status === 'approved' || req.status === 'rejected' || req.status === 'cancelled';
+  return req.status === 'approved' || req.status === 'rejected' || req.status === 'cancelled' || req.status === 'expired';
 }
 
 
@@ -236,18 +255,34 @@ function commentsLocked(req) {
     addNotif(emp.id,'New Open Shift','A Skate Rental shift is available on '+fmtDate(tom)+'.','info','openshift');
   });
 
-  // 5. Employee-posted open swap (public) — Casey (u5) wants coverage
-  var myShift = DB.shifts.find(function(s){return s.employeeId==='u5'&&s.date>=todayStr();});
-  if (myShift) {
-    var empSwapReq = createRequest('openShift', 'u5', {
-      date: myShift.date, startTime: myShift.startTime, endTime: myShift.endTime,
-      taskId: myShift.taskId, taskName: myShift.taskName, taskColor: myShift.taskColor,
-      notes: 'Anyone available to cover? Family commitment.',
-      status: 'OPEN', claimedBy: null, claimType: null, swapShiftId: myShift.id,
-      approvedBy: null, approvedAt: null,
-    }, 'public', []);
-    addNotif('u1','Employee Open Shift','Casey Nguyen posted a shift for coverage.','info','openshift');
-    addNotif('u2','Employee Open Shift','Casey Nguyen posted a shift for coverage.','info','openshift');
+  // 5. Employee-posted OPEN SWAP (public marketplace) — Casey (u5) wants coverage
+  var caseyShift=DB.shifts.find(function(s){return s.employeeId==='u5'&&s.date>=todayStr();});
+  if(caseyShift){
+    createRequest('swap','u5',{
+      receiverId:null,requesterShiftId:caseyShift.id,receiverShiftId:null,
+      message:'Anyone available to cover this shift? Family commitment.',
+      adminNotes:'',responseMessage:'',responseBy:null,responseAt:null,
+      openSwap:true,
+      expiresAt:new Date(Date.now()+7*864e5).toISOString(),
+      reviewedById:null,reviewedAt:null,
+    },'public',[]);
+    DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!=='u5';}).forEach(function(emp){
+      addNotif(emp.id,'Open Swap Available','Casey Nguyen posted a shift to the open swap marketplace.','swap','requests');
+    });
+  }
+
+  // 6. Coverage request (NOT a swap) - Sam (u4) needs coverage, no exchange
+  var samCovShift=DB.shifts.find(function(s){return s.employeeId==='u4'&&s.date>=todayStr();});
+  if(samCovShift){
+    createRequest('coverage','u4',{
+      requesterShiftId:samCovShift.id,
+      exchangeRequired:false,
+      message:'I have a medical appointment and need someone to cover this shift.',
+      status:'OPEN',
+    },'public',[]);
+    DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!=='u4';}).forEach(function(emp){
+      addNotif(emp.id,'Coverage Needed','Sam Torres needs coverage for a shift.','info','openshift');
+    });
   }
 })();
 
@@ -404,6 +439,7 @@ function getWeekShifts(off,arr){var dates=getWeekDays(off).map(fmtDate);return g
 // ─── RENDER CORE ──────────────────────────────────────────────────
 function render(){
   var app=document.getElementById('app');if(!app)return;
+  expireOpenSwaps(); // auto-expire stale open swaps
   if(state.page==='login'){app.innerHTML=renderLogin();var pw=document.getElementById('loginPass');if(pw)pw.onkeydown=function(e){if(e.key==='Enter')handleLogin();};return;}
   if(state.page==='register'){app.innerHTML=renderRegister();var rp=document.getElementById('regPass2');if(rp)rp.onkeydown=function(e){if(e.key==='Enter')handleRegister();};return;}
   if(!state.currentUser){state.page='login';render();return;}
@@ -442,7 +478,7 @@ function renderSidebar(){
     {id:'dashboard',   label:'Dashboard',   icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>'},
     {id:'schedule',    label:'Schedule',    icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'},
     {id:'requests',    label:'Requests',    icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>'},
-    {id:'openshift',   label:'Open Shifts', icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="12" y1="14" x2="12" y2="20"/><line x1="9" y1="17" x2="15" y2="17"/></svg>'},
+    {id:'openshift',   label:'Marketplace', icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>'},
     {id:'availability',label:'Availability',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'},
   ];
   if(isMgr){
@@ -451,18 +487,26 @@ function renderSidebar(){
     pages.push({id:'admin',   label:'Admin',   icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'});
   }
   // Badge counts
+  // reqBadge: personal requests only (private swaps + avail + timeoff, excluding public open swaps)
   var pendingReqs=DB.requests.filter(function(r){
+    if(r.type==='openShift') return false;
+    if(r.type==='coverage'&&r.visibility==='public') return false;
+    if(r.type==='swap'&&r.visibility==='public') return false; // those go to openswaps tab
     return r.status==='pending'&&(isMgr||(r.userId===u.id)||(r.type==='swap'&&r.data&&r.data.receiverId===u.id));
   });
-  var reqBadge=pendingReqs.filter(function(r){return r.type!=='openShift';}).length;
-  var openBadge=DB.requests.filter(function(r){return r.type==='openShift'&&r.data&&r.data.status==='OPEN';}).length;
+  var reqBadge=pendingReqs.length;
+  var openBadge=DB.requests.filter(function(r){
+    return (r.type==='openShift'&&r.data&&r.data.status==='OPEN')||
+           ((r.type==='swap'||r.type==='coverage')&&r.visibility==='public'&&r.status==='pending');
+  }).length;
   var prevBadge=isMgr?DB.previewShifts.length:0;
   var html='<aside class="sidebar"><div class="logo"><div class="logo-mark" style="display:flex;align-items:center;justify-content:center">SW</div><span class="logo-text">ShiftWise</span></div><nav class="nav">';
   pages.forEach(function(p){
     var badge='';
-    if(p.id==='requests'  && reqBadge>0)  badge='<span class="nav-badge">'+reqBadge+'</span>';
-    if(p.id==='openshift' && openBadge>0) badge='<span class="nav-badge">'+openBadge+'</span>';
-    if(p.id==='preview'   && prevBadge>0) badge='<span class="nav-badge">'+prevBadge+'</span>';
+    if(p.id==='requests'  && reqBadge>0)      badge='<span class="nav-badge">'+reqBadge+'</span>';
+    if(p.id==='openshift' && openBadge>0)     badge='<span class="nav-badge">'+openBadge+'</span>';
+
+    if(p.id==='preview'   && prevBadge>0)     badge='<span class="nav-badge">'+prevBadge+'</span>';
     html+='<div class="nav-item'+(state.page===p.id?' active':'')+'" onclick="navigate(\''+p.id+'\')">'+p.icon+' '+p.label+badge+'</div>';
   });
   html+='</nav><div class="sidebar-footer"><div class="user-chip" onclick="navigate(\'profile\')" title="My Profile"><div class="avatar" style="background:'+esc(u.avatarColor)+'">'+esc(initials(u.name))+'</div><div style="flex:1;min-width:0"><div class="user-name">'+esc(u.name)+'</div><div class="user-role-label">'+esc(u.role.toLowerCase())+'</div></div></div>';
@@ -475,7 +519,7 @@ function renderSidebar(){
 function renderTopbar(){
   var u=state.currentUser;
   var unread=DB.notifications.filter(function(n){return n.userId===u.id&&!n.read;}).length;
-  var titles={dashboard:'Dashboard',schedule:'Schedule',requests:'Requests',admin:'Admin Panel',profile:'Profile',availability:'Availability',openshift:'Open Shifts',settings:'Settings',preview:'Preview Schedule'};
+  var titles={dashboard:'Dashboard',schedule:'Schedule',requests:'Requests',admin:'Admin Panel',profile:'Profile',availability:'Availability',openshift:'Shift Marketplace',settings:'Settings',preview:'Preview Schedule'};
   var extra='';
   if(state.page==='schedule'&&state.view==='list'&&isAdminOrMgr())
     extra='<button class="btn btn-sm btn-primary" onclick="openModal(\'create-shift\',{})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Shift</button>';
@@ -492,7 +536,7 @@ function renderMain(){return'<div class="main">'+renderTopbar()+'<div class="con
 function renderPage(){
   var map={dashboard:renderDashboard,schedule:renderSchedule,requests:renderRequests,
             admin:renderAdmin,profile:renderProfile,availability:renderAvailability,
-            openshift:renderOpenShifts,settings:renderSettings,preview:renderPreview};
+            openshift:renderMarketplace,settings:renderSettings,preview:renderPreview};
   return(map[state.page]||renderDashboard)();
 }
 
@@ -599,58 +643,121 @@ function setScheduleScope(s){state.scheduleScope=s;render();}
 function renderGanttView(shiftsArr){
   var days=getWeekDays(state.weekOffset),today=todayStr();
   var allShifts=getWeekShifts(state.weekOffset,shiftsArr);
-  var isMgr=isAdminOrMgr();
-  var RANGE=GANTT_END-GANTT_START; // hours shown
+  var RANGE=GANTT_END-GANTT_START;
+  var LABEL_W=140; // px width of left task-label column
+
+  // Read-only banner
   var h='<div style="background:var(--bg3);border-bottom:1px solid var(--border);padding:8px 16px;font-size:11.5px;color:var(--text3);display:flex;align-items:center;gap:6px">';
   h+='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
   h+='Week view is <strong>read-only</strong>. Switch to <button class="btn btn-xs btn-ghost" style="display:inline-flex;margin:0 2px" onclick="setView(\'list\')">List</button> view to create and edit shifts.';
   h+='</div>';
-  h+='<div class="gantt-wrapper">';
-  // Hour ruler (shared header)
-  h+='<div style="padding:0 0 0 120px;margin-bottom:4px;position:relative;height:20px">';
-  for(var hr=GANTT_START;hr<=GANTT_END;hr+=2){
-    var pct=((hr-GANTT_START)/RANGE)*100;
-    h+='<div style="position:absolute;left:calc('+pct+'% );font-size:9px;color:var(--text3);transform:translateX(-50%)">'+fmt12(hr+':00')+'</div>';
-    h+='<div style="position:absolute;left:calc('+pct+'%);top:14px;bottom:0;width:1px;background:var(--border);opacity:.5"></div>';
-  }
-  h+='</div>';
-  days.forEach(function(d){
-    var ds=fmtDate(d);
-    var isToday=ds===today;
-    var dayShifts=allShifts.filter(function(s){return s.date===ds;});
-    h+='<div class="gantt-day-section">';
-    h+='<div class="gantt-day-header">'+DAYS_SHORT[d.getDay()]+' '+d.getDate()+(isToday?' <span class="gantt-today-badge">Today</span>':'')+'</div>';
-    if(!dayShifts.length){h+='<div class="gantt-empty-day">No shifts</div></div>';return;}
-    // Stack overlapping shifts
-    var lanes=[];
-    dayShifts.sort(function(a,b){return timeToMins(a.startTime)-timeToMins(b.startTime);});
-    dayShifts.forEach(function(s){
-      var sm=timeToMins(s.startTime),em=timeToMins(s.endTime);
-      var lane=-1;
-      for(var li=0;li<lanes.length;li++){if(lanes[li]<=sm){lane=li;break;}}
-      if(lane===-1){lane=lanes.length;lanes.push(0);}
-      lanes[lane]=em;
-      var left=Math.max(0,((sm/60-GANTT_START)/RANGE)*100);
-      var right=Math.min(100,((em/60-GANTT_START)/RANGE)*100);
-      var width=right-left;
-      var emp=getUser(s.employeeId);
-      var onTO=isOnApprovedTimeOff(s.employeeId,ds);
-      h+='<div class="gantt-row">';
-      if(isMgr&&emp){h+='<div style="width:120px;font-size:11px;color:var(--text2);position:absolute;left:0;top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(emp.name)+'</div>';}
-      h+='<div style="margin-left:'+(isMgr?120:0)+'px;position:relative;height:48px">';
-      h+='<div class="gantt-bar" style="left:'+left+'%;width:'+width+'%;background:'+esc(s.taskColor||'#6366f1')+(onTO?';opacity:.4':'')+'" data-id="'+s.id+'" onclick="viewShift(this)">';
-      h+='<div><div class="gantt-bar-label">'+(isMgr?esc(s.taskName||'Shift'):esc(s.taskName||'Shift'))+'</div>';
-      h+='<div class="gantt-bar-time">'+fmtRange(s.startTime,s.endTime)+'</div></div>';
-      if(onTO)h+='<div style="font-size:8px;color:rgba(255,255,255,.9);margin-left:4px">\u26D4</div>';
-      h+='</div></div></div>';
-    });
-    h+='</div>';
+
+  // Collect which tasks appear this week
+  var taskIds=[];
+  allShifts.forEach(function(s){if(taskIds.indexOf(s.taskId)===-1)taskIds.push(s.taskId);});
+  taskIds.sort(function(a,b){
+    var ta=getTask(a),tb=getTask(b);
+    return(ta?ta.name:'').localeCompare(tb?tb.name:'');
   });
-  h+='</div>';
+
+  h+='<div class="gantt-wrapper">';
+
+  // Shared hour ruler
+  h+='<div style="display:flex;margin-bottom:6px">';
+  h+='<div style="width:'+LABEL_W+'px;flex-shrink:0"></div>';
+  h+='<div style="flex:1;position:relative;height:18px">';
+  for(var hri=GANTT_START;hri<=GANTT_END;hri+=2){
+    var pct=((hri-GANTT_START)/RANGE)*100;
+    h+='<div style="position:absolute;left:'+pct+'%;font-size:9px;color:var(--text3);transform:translateX(-50%)">'+fmt12(hri+':00')+'</div>';
+  }
+  h+='</div></div>';
+
+  function gridLines(){
+    var g='';
+    for(var ghi=GANTT_START;ghi<=GANTT_END;ghi+=2){
+      var gp=((ghi-GANTT_START)/RANGE)*100;
+      g+='<div style="position:absolute;left:'+gp+'%;top:0;bottom:0;width:1px;background:var(--border);opacity:.4;pointer-events:none"></div>';
+    }
+    return g;
+  }
+
+  // One section per day
+  days.forEach(function(d){
+    var ds=fmtDate(d),isToday=ds===today;
+    var dayShifts=allShifts.filter(function(s){return s.date===ds;});
+
+    h+='<div class="gantt-day-section">';
+    h+='<div class="gantt-day-header" style="margin-bottom:8px">';
+    h+=DAYS_SHORT[d.getDay()]+' '+MONTHS[d.getMonth()]+' '+d.getDate();
+    if(isToday)h+=' <span class="gantt-today-badge">Today</span>';
+    h+='</div>';
+
+    if(!dayShifts.length){
+      h+='<div class="gantt-empty-day" style="padding-left:'+LABEL_W+'px">No shifts scheduled</div>';
+      h+='</div>';
+      return;
+    }
+
+    // One row per task category
+    taskIds.forEach(function(tid){
+      var task=getTask(tid);
+      var taskShifts=dayShifts.filter(function(s){return s.taskId===tid;});
+      if(!taskShifts.length)return;
+
+      var taskColor=task?task.color:'#888';
+      var taskName=task?task.name:'Shift';
+
+      taskShifts.sort(function(a,b){return timeToMins(a.startTime)-timeToMins(b.startTime);});
+      var laneEnds=[];
+      var laned=taskShifts.map(function(s){
+        var sm=timeToMins(s.startTime),em=timeToMins(s.endTime);
+        var lane=-1;
+        for(var li=0;li<laneEnds.length;li++){if(laneEnds[li]<=sm){lane=li;break;}}
+        if(lane===-1){lane=laneEnds.length;laneEnds.push(0);}
+        laneEnds[lane]=em;
+        return{s:s,sm:sm,em:em,lane:lane};
+      });
+      var laneCount=Math.max(1,laneEnds.length);
+      var BAR_H=36,GAP=4;
+      var rowH=laneCount*(BAR_H+GAP)+GAP;
+
+      h+='<div style="display:flex;margin-bottom:6px;min-height:'+rowH+'px">';
+      // Task label column
+      h+='<div style="width:'+LABEL_W+'px;flex-shrink:0;display:flex;align-items:flex-start;padding-top:'+GAP+'px">';
+      h+='<div style="display:flex;align-items:center;gap:6px">';
+      h+='<div style="width:10px;height:10px;border-radius:50%;background:'+esc(taskColor)+';flex-shrink:0"></div>';
+      h+='<span style="font-size:11px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:118px">'+esc(taskName)+'</span>';
+      h+='</div></div>';
+      // Timeline area
+      h+='<div style="flex:1;position:relative;height:'+rowH+'px;border-radius:6px">';
+      h+=gridLines();
+      laned.forEach(function(item){
+        var s=item.s;
+        var left=Math.max(0,((item.sm/60-GANTT_START)/RANGE)*100);
+        var right=Math.min(100,((item.em/60-GANTT_START)/RANGE)*100);
+        var width=Math.max(0.5,right-left);
+        var top=GAP+item.lane*(BAR_H+GAP);
+        var emp=getUser(s.employeeId);
+        var onTO=isOnApprovedTimeOff(s.employeeId,ds);
+        h+='<div class="gantt-bar" style="'+
+          'position:absolute;left:'+left+'%;width:'+width+'%;top:'+top+'px;height:'+BAR_H+'px;'+
+          'background:'+esc(taskColor)+(onTO?';opacity:.4':'')+'" '+
+          'data-id="'+s.id+'" onclick="viewShift(this)" '+
+          'title="'+esc(emp?emp.name:'?')+' \u00B7 '+esc(fmtRange(s.startTime,s.endTime))+'">';
+        h+='<div style="overflow:hidden;white-space:nowrap">';
+        h+='<div class="gantt-bar-label">'+(emp?esc(emp.name):'?')+'</div>';
+        h+='<div class="gantt-bar-time">'+fmtRange(s.startTime,s.endTime)+'</div>';
+        if(onTO)h+='<div style="font-size:8px;color:rgba(255,255,255,.9)">\u26D4 Time Off</div>';
+        h+='</div></div>';
+      });
+      h+='</div></div>'; // close timeline + row
+    });
+    h+='</div>'; // close day section
+  });
+
+  h+='</div>'; // close gantt-wrapper
   return h;
 }
-
-// ── LIST VIEW (fully editable) ────────────────────────────────────
 function renderListView(shiftsArr){
   var dates=getWeekDays(state.weekOffset).map(fmtDate);
   var shifts=getWeekShifts(state.weekOffset,shiftsArr),isMgr=isAdminOrMgr();
@@ -712,34 +819,35 @@ function editShiftBtn(evt,el){evt.stopPropagation();openModal('edit-shift',{id:e
 
 // ─── UNIFIED REQUESTS PAGE ────────────────────────────────────────
 function renderRequests(){
+  // Requests tab = PERSONAL WORKFLOW ONLY
+  // type: availability | timeOff | private swap
+  // Public swaps → openswaps tab  |  openShift → openshift tab
   var u=state.currentUser,isMgr=isAdminOrMgr();
-  // All requests visible to this user (excluding openShift — those are on openshift page)
-  var visible=DB.requests.filter(function(r){
-    return r.type!=='openShift' && canSeeRequest(r,u);
+  var personal=DB.requests.filter(function(r){
+    if(r.type==='openShift') return false;
+    if(r.type==='coverage'&&r.visibility==='public') return false;
+    if(r.type==='swap'&&r.visibility==='public') return false;
+    return canSeeRequest(r,u);
   });
-  // Type filter tabs
-  var types=[
-    {id:'all',label:'All'},
-    {id:'swap',label:'Swaps'},
-    {id:'availability',label:'Availability'},
-    {id:'timeOff',label:'Time Off'},
-  ];
+  var types=[{id:'all',label:'All'},{id:'swap',label:'Swaps'},{id:'coverage',label:'Coverage'},{id:'availability',label:'Availability'},{id:'timeOff',label:'Time Off'}];
   var h='<div class="admin-tabs">';
   types.forEach(function(t){
-    var cnt=t.id==='all'?visible.length:visible.filter(function(r){return r.type===t.id;}).length;
+    var cnt=t.id==='all'?personal.length:personal.filter(function(r){return r.type===t.id;}).length;
     h+='<button class="admin-tab'+(state.requestTypeFilter===t.id?' active':'')+'" data-tab="'+t.id+'" onclick="setReqTypeFilter(this)">'+t.label+(cnt>0?' <span style="opacity:.5;font-size:10px">('+cnt+')</span>':'')+' </button>';
   });
   h+='</div>';
-  // Status filter
   var statuses=['all','pending','approved','rejected','cancelled'];
   h+='<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">';
   statuses.forEach(function(s){h+='<button class="btn btn-xs '+(state.requestFilter===s?'btn-primary':'btn-ghost')+'" onclick="setReqFilter(\''+s+'\')">'+esc(s.charAt(0).toUpperCase()+s.slice(1))+'</button>';});
   h+='</div>';
-  var filtered=visible;
+  var filtered=personal.slice();
   if(state.requestTypeFilter!=='all')filtered=filtered.filter(function(r){return r.type===state.requestTypeFilter;});
   if(state.requestFilter!=='all')filtered=filtered.filter(function(r){return r.status===state.requestFilter;});
-  filtered=filtered.slice().reverse(); // newest first
-  if(!filtered.length){h+='<div class="empty-state"><div class="empty-icon">\uD83D\uDCCB</div><div class="empty-title">No requests found</div></div>';return h;}
+  filtered.reverse();
+  if(!filtered.length){
+    var hint=personal.length>0?'No requests match the current filter.':'No personal requests yet.';
+    return h+'<div class="empty-state"><div class="empty-icon">\uD83D\uDCCB</div><div class="empty-title">'+hint+'</div></div>';
+  }
   filtered.forEach(function(r){h+=renderRequestCard(r);});
   return h;
 }
@@ -773,12 +881,28 @@ function renderRequestCard(req){
   h+=renderReqComments(req);
   // Actions
   h+='<div class="swap-actions" style="margin-top:12px">';
-  if(canApprove){
+  // Swap lifecycle: show approval only AFTER receiver has accepted
+  var swapAccepted=req.type==='swap'&&req.data&&req.data.responseBy;
+  var swapPendingAcceptance=req.type==='swap'&&req.status==='pending'&&!swapAccepted&&req.data&&(req.data.receiverId||req.visibility==='private');
+  if(canApprove&&req.type!=='swap'){
+    // Non-swap requests: approve directly
     h+='<button class="btn btn-success btn-sm" data-rid="'+req.id+'" onclick="approveRequest(this)">\u2713 Approve</button>';
     h+='<button class="btn btn-danger btn-sm" data-rid="'+req.id+'" onclick="openModal(\'reject-request\',{id:\''+req.id+'\'})">Reject</button>';
   }
-  if(req.type==='swap'&&req.status==='pending'&&req.data&&req.data.receiverId===u.id&&!isOwner){
-    h+='<button class="btn btn-success btn-sm" data-rid="'+req.id+'" onclick="acceptSwapReq(this)">\u2713 Accept Swap</button>';
+  if(canApprove&&req.type==='swap'&&swapAccepted){
+    // Swap approved only AFTER acceptance; also block if admin is involved
+    var isInvolved=(u.id===req.userId)||(req.data&&req.data.receiverId===u.id);
+    if(!isInvolved){
+      h+='<button class="btn btn-success btn-sm" data-rid="'+req.id+'" onclick="openModal(\'confirm-swap-approve\',{id:\''+req.id+'\'})">\u2713 Finalize Swap</button>';
+      h+='<button class="btn btn-danger btn-sm" data-rid="'+req.id+'" onclick="openModal(\'reject-request\',{id:\''+req.id+'\'})">Reject</button>';
+    }
+  }
+  if(swapPendingAcceptance&&isAdminOrMgr()){
+    h+='<span style="font-size:12px;color:var(--text3);font-style:italic">\u23F3 Awaiting employee acceptance</span>';
+  }
+  // Directed swap: named receiver gets accept/decline with confirmation modal
+  if(req.type==='swap'&&req.visibility==='private'&&req.status==='pending'&&req.data&&req.data.receiverId===u.id&&!isOwner&&!swapAccepted){
+    h+='<button class="btn btn-success btn-sm" data-rid="'+req.id+'" onclick="openModal(\'confirm-swap-accept\',{id:\''+req.id+'\'})">\u2713 Accept Swap</button>';
     h+='<button class="btn btn-danger btn-sm" data-rid="'+req.id+'" onclick="declineSwapReq(this)">\u2715 Decline</button>';
   }
   if(canCancel)h+='<button class="btn btn-cancel-req btn-sm" data-rid="'+req.id+'" onclick="openModal(\'cancel-request\',{id:\''+req.id+'\'})">Cancel Request</button>';
@@ -797,26 +921,88 @@ function reqSummary(req){
   return req.type;
 }
 
-// Comments component for requests
+// Comments component — threaded chat-style UI
 function renderReqComments(req){
   var u=state.currentUser;
   var locked=commentsLocked(req);
-  var h='<div class="swap-comment-section" style="margin-top:12px"><div class="swap-comment-title">Thread'+(locked?' \uD83D\uDD12':'')+'</div>';
-  if(req.comments&&req.comments.length){
-    req.comments.forEach(function(c){
-      var cu=getUser(c.userId);
-      h+='<div class="comment-item" style="margin-bottom:8px">';
-      h+='<div class="avatar avatar-sm" style="background:'+(cu?esc(cu.avatarColor):'#888')+'">'+(cu?esc(initials(cu.name)):'?')+'</div>';
-      h+='<div class="comment-bubble"><div class="comment-header"><span class="comment-author">'+esc(c.userName||'User')+'</span>'+roleBadgeHtml(c.role)+'<span class="comment-time">'+relTime(c.timestamp)+'</span></div>';
-      h+='<div class="comment-text">'+esc(c.message)+'</div></div></div>';
-    });
+  var comments=req.comments||[];
+
+  // Container: fixed-height scrollable box + pinned input
+  var h='<div style="margin-top:14px;border:1px solid var(--border);border-radius:10px;overflow:hidden">';
+
+  // Thread header
+  h+='<div style="padding:8px 14px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
+  h+='<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">Thread';
+  if(locked)h+=' <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px;vertical-align:middle"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
+  h+='</span>';
+  h+='<span style="font-size:11px;color:var(--text3)">'+comments.length+' message'+(comments.length!==1?'s':'')+'</span>';
+  h+='</div>';
+
+  // Scrollable message area
+  h+='<div style="max-height:220px;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px;background:var(--bg2)">';
+
+  if(!comments.length){
+    h+='<div style="text-align:center;padding:20px 0;font-size:12px;color:var(--text3)">No messages yet'+(locked?'':' \u2014 start the conversation')+'</div>';
   }
+
+  comments.forEach(function(c){
+    var cu=getUser(c.userId);
+    var isMe=(u&&c.userId===u.id);
+    var isPriv=(c.role==='admin'||c.role==='ADMIN'||c.role==='manager'||c.role==='MANAGER');
+
+    // Layout: my messages right-aligned, others left-aligned
+    h+='<div style="display:flex;gap:8px;'+(isMe?'flex-direction:row-reverse':'')+'">';
+    // Avatar
+    h+='<div class="avatar avatar-sm" style="flex-shrink:0;background:'+(cu?esc(cu.avatarColor):'#888')+'">'+
+        (cu?esc(initials(cu.name)):'?')+'</div>';
+    // Bubble + meta
+    h+='<div style="max-width:72%;min-width:80px">';
+    // Name + role badge + time — mirrored alignment
+    h+='<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;'+(isMe?'justify-content:flex-end;':'justify-content:flex-start;')+'">';
+    if(!isMe)h+='<span style="font-size:11px;font-weight:700;color:var(--text)">'+esc(c.userName||'User')+'</span>';
+    if(isPriv){
+      var badge=c.role==='admin'||c.role==='ADMIN'?
+        '<span class="comment-role-badge badge-admin-role">Admin</span>':
+        '<span class="comment-role-badge badge-manager-role">Manager</span>';
+      h+=badge;
+    }
+    if(isMe)h+='<span style="font-size:11px;font-weight:700;color:var(--text)">You</span>';
+    h+='<span style="font-size:10px;color:var(--text3)">'+relTime(c.timestamp)+'</span>';
+    h+='</div>';
+    // Message bubble
+    var bubbleBg=isMe?'var(--brand-bg)':isPriv?'rgba(239,68,68,.06)':'var(--bg3)';
+    var bubbleBorder=isMe?'rgba(99,102,241,.3)':isPriv?'rgba(239,68,68,.15)':'var(--border)';
+    var textColor=isMe?'var(--brand2)':isPriv?'var(--text)':'var(--text2)';
+    h+='<div style="'+
+        'background:'+bubbleBg+';'+
+        'border:1px solid '+bubbleBorder+';'+
+        'border-radius:'+(isMe?'12px 2px 12px 12px':'2px 12px 12px 12px')+';'+
+        'padding:8px 12px;'+
+        'font-size:13px;'+
+        'color:'+textColor+';'+
+        'line-height:1.5'+
+        '">';
+    h+=esc(c.message);
+    h+='</div></div></div>';
+  });
+
+  h+='</div>'; // end scrollable area
+
+  // Pinned input
   if(locked){
-    h+='<div class="comments-locked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>Comments are locked \u2014 this request is '+req.status+'.</div>';
+    h+='<div class="comments-locked" style="border-radius:0;border-top:1px solid var(--border);border-left:none;border-right:none;border-bottom:none">';
+    h+='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
+    h+='Comments are locked \u2014 this request is '+req.status+'.';
+    h+='</div>';
   } else {
-    h+='<div class="comment-input-row"><input id="reqComment-'+req.id+'" placeholder="Add to thread..." style="font-size:13px"><button class="btn btn-sm btn-ghost" data-rid="'+req.id+'" onclick="addReqComment(this)">Send</button></div>';
+    h+='<div style="padding:10px 12px;border-top:1px solid var(--border);background:var(--bg2);display:flex;gap:8px">';
+    h+='<input id="reqComment-'+req.id+'" placeholder="Write a message\u2026" style="flex:1;font-size:13px">';
+    h+='<button class="btn btn-sm btn-primary" data-rid="'+req.id+'" onclick="addReqComment(this)">Send</button>';
+    h+='</div>';
   }
-  h+='</div>';return h;
+
+  h+='</div>'; // end container
+  return h;
 }
 function addReqComment(el){
   var rid=el.getAttribute('data-rid'),req=getReq(rid);if(!req)return;
@@ -836,12 +1022,24 @@ function addReqComment(el){
 // ── REQUEST ACTIONS ───────────────────────────────────────────────
 function approveRequest(el){
   var rid=el.getAttribute('data-rid'),req=getReq(rid);if(!req)return;
-  if(req.userId===state.currentUser.id){toast('Cannot approve your own request.','error');return;}
+  var u=state.currentUser;
+  // Self-approval block: no one can approve their own requests
+  if(req.userId===u.id){toast('Cannot approve your own request.','error');return;}
+  // Admin/manager self-involvement block
+  if(req.type==='swap'&&req.data){
+    if(req.data.receiverId===u.id){toast('Cannot approve a swap you are a receiver in.','error');return;}
+  }
+  // Swap lifecycle guard: admin can only approve AFTER employee acceptance
+  if(req.type==='swap'&&!req.data.responseBy){
+    toast('Cannot approve: the other employee has not accepted this swap yet.','error');return;
+  }
   req.status='approved';req.updatedAt=now();
-  // Apply the request effect
   applyApprovedRequest(req);
   addNotif(req.userId,'Request Approved','Your '+req.type+' request has been approved.','info','requests');
-  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,action:'REQUEST_APPROVED',entityType:'Request',entityId:rid,createdAt:now()});
+  if(req.type==='swap'&&req.data.receiverId){
+    addNotif(req.data.receiverId,'Swap Approved','The swap has been approved by management.','info','requests');
+  }
+  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'REQUEST_APPROVED',entityType:'Request',entityId:rid,createdAt:now()});
   toast('Request approved.','success');render();
 }
 function applyApprovedRequest(req){
@@ -883,9 +1081,308 @@ function declineSwapReq(el){
   addNotif(req.userId,'Swap Declined',u.name+' declined your swap request.','swap','requests');
   toast('Swap declined.','info');render();
 }
+// Employee volunteers to take a public open swap
+function volunteerOpenSwap(el){
+  var rid=el.getAttribute('data-rid'),req=getReq(rid);if(!req)return;
+  var u=state.currentUser;
+  if(req.userId===u.id){toast('Cannot take your own swap.','error');return;}
+  // Assign this employee as the receiver and move to accepted-pending-review
+  req.data.receiverId=u.id;
+  req.data.responseMessage='Volunteered to take this swap.';
+  req.data.responseBy=u.id;
+  req.data.responseAt=now();
+  // Change to private now that a receiver is assigned; move to pending admin review
+  req.visibility='private';
+  req.data.openSwap=false;
+  req.comments.push({userId:u.id,userName:u.name,role:u.role.toLowerCase(),
+    message:'\u2713 I can take this swap. Waiting for manager approval.',timestamp:now()});
+  req.updatedAt=now();
+  addNotif(req.userId,'Swap Volunteer',u.name+' volunteered to take your open swap. Awaiting manager approval.','swap','requests');
+  DB.users.filter(function(x){return x.role==='ADMIN'||x.role==='MANAGER';}).forEach(function(mgr){
+    addNotif(mgr.id,'Open Swap Claimed',u.name+' and '+req.userName+' swap is ready for review.','swap','requests');
+  });
+  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'OPEN_SWAP_TAKEN',entityType:'Request',entityId:rid,createdAt:now()});
+  toast('You have volunteered for this swap! Awaiting manager approval.','success');render();
+}
 
 
 // ─── OPEN SHIFTS PAGE (globally visible, split by createdByRole) ──
+// ─── SHIFT MARKETPLACE (unified: openShift + public swaps) ──────
+// Routing rule: type=openShift OR (type=swap && visibility=public)
+// Split by createdByRole only — not by system type
+function renderMarketplace(){
+  var u=state.currentUser,isMgr=isAdminOrMgr();
+
+  // Collect all marketplace items
+  var allItems=DB.requests.filter(function(r){
+    return (r.type==='openShift'&&r.visibility==='public')||
+           (r.type==='swap'&&r.visibility==='public');
+  });
+
+  // Pending claims on openShifts needing admin review
+  var pendingClaims=allItems.filter(function(r){
+    return r.type==='openShift'&&r.data&&r.data.status==='PENDING';
+  });
+
+  // Active marketplace pool (open, not yet claimed/approved)
+  var active=allItems.filter(function(r){
+    if(r.type==='openShift') return r.data&&r.data.status==='OPEN';
+    return r.status==='pending'; // open swaps
+  });
+
+  var empPosted=active.filter(function(r){return r.createdByRole==='employee';});
+  var mgrPosted=active.filter(function(r){return r.createdByRole==='manager'||r.createdByRole==='admin';});
+
+  var h='';
+
+  // Admin pending claims banner
+  if(isMgr&&pendingClaims.length){
+    h+='<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:12px;padding:16px;margin-bottom:20px">';
+    h+='<div style="font-size:13px;font-weight:700;color:var(--amber);margin-bottom:12px">\u26A0\uFE0F '+pendingClaims.length+' Open Shift Claim'+(pendingClaims.length!==1?'s':'')+' Awaiting Approval</div>';
+    pendingClaims.forEach(function(r){
+      var claimer=getUser(r.data&&r.data.claimedBy);
+      h+='<div class="request-card" style="margin-bottom:8px">';
+      h+='<div style="display:flex;align-items:center;justify-content:space-between">';
+      h+='<div><div style="font-weight:600;color:var(--text)">'+fmtDateLabel(r.data.date)+' \u00B7 '+fmtRange(r.data.startTime,r.data.endTime)+'</div>';
+      h+=taskBadgeHtml(r.data.taskName,r.data.taskColor);
+      if(claimer)h+='<div style="font-size:12px;color:var(--text2);margin-top:4px">Claimed by <strong>'+esc(claimer.name)+'</strong></div>';
+      h+='</div><div style="display:flex;gap:8px">';
+      h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="approveOpenShiftReq(this)">\u2713 Approve</button>';
+      h+='<button class="btn btn-danger btn-sm" data-rid="'+r.id+'" onclick="rejectOpenShiftReq(this)">\u2715 Return</button>';
+      h+='</div></div></div>';
+    });
+    h+='</div>';
+  }
+
+  // Page header + post button
+  h+='<div class="section-header"><div><div class="section-title">Shift Marketplace</div>';
+  h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">Open shifts and swap offers \u2014 visible to all employees</div></div>';
+  if(isMgr)h+='<button class="btn btn-primary" onclick="openModal(\'create-openshift\',{})">+ Post Open Shift</button>';
+  h+='</div>';
+
+  if(!active.length){
+    h+='<div class="empty-state"><div class="empty-icon">\u2705</div><div class="empty-title">Marketplace is empty</div>';
+    h+='<div class="empty-sub">No open shifts or swap offers right now.</div></div>';
+    return h;
+  }
+
+  // \uD83D\uDFE3 Admin/Manager Posted section
+  if(mgrPosted.length){
+    h+='<div class="req-section-head"><div class="req-section-dot" style="background:#a855f7"></div>';
+    h+='\uD83D\uDFE3 Admin / Manager Posted</div>';
+    mgrPosted.slice().reverse().forEach(function(r){h+=renderMarketplaceCard(r);});
+  }
+
+  // 🔵 Employee Posted section
+  if(empPosted.length){
+    h+='<div class="req-section-head" style="margin-top:20px"><div class="req-section-dot" style="background:#10b981"></div>';
+    h+='🔵 Employee Posted</div>';
+    empPosted.slice().reverse().forEach(function(r){h+=renderMarketplaceCard(r);});
+  }
+
+  // Recently resolved/filled
+  var resolved=allItems.filter(function(r){
+    if(r.type==='openShift') return r.data&&r.data.status==='FILLED';
+    return r.status==='approved'||r.status==='rejected'||r.status==='cancelled';
+  }).slice(-5).reverse();
+  if(resolved.length){
+    h+='<div style="margin-top:28px"><div style="font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Recently Resolved</div>';
+    resolved.forEach(function(r){
+      var owner=getUser(r.userId);
+      var label=r.type==='openShift'?'Open Shift':'Open Swap';
+      var statusLabel=r.type==='openShift'?'Filled':(r.status.charAt(0).toUpperCase()+r.status.slice(1));
+      var badgeCls=r.type==='openShift'?'badge-active':'badge-'+r.status;
+      h+='<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
+      h+='<div style="display:flex;align-items:center;gap:8px">';
+      if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+'">'+esc(initials(owner.name))+'</div>';
+      h+='<div><div style="font-size:13px;color:var(--text2)">'+(owner?esc(owner.name):'?')+' \u00B7 '+label+'</div>';
+      h+=reqSourceBadge(r.createdByRole)+'</div></div>';
+      h+='<span class="badge '+badgeCls+'">'+statusLabel+'</span></div>';
+    });
+    h+='</div>';
+  }
+  return h;
+}
+
+// Unified marketplace card — handles both openShift and public swap types
+function renderMarketplaceCard(r){
+  var u=state.currentUser,isMgr=isAdminOrMgr();
+  var isOwner=r.userId===u.id;
+  var isOpenShift=r.type==='openShift';
+  var isOpenSwap=r.type==='swap'&&r.visibility==='public';
+  var owner=getUser(r.userId);
+  var h='<div class="request-card">';
+
+  // Meta row
+  h+='<div class="request-card-header">';
+  h+='<div style="flex:1">';
+  h+='<div class="request-card-meta">';
+  if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+';width:20px;height:20px;font-size:9px">'+esc(initials(owner.name))+'</div>';
+  h+='<span style="font-size:13px;font-weight:600;color:var(--text)">'+(owner?esc(owner.name):'Unknown')+'</span>';
+  h+=reqSourceBadge(r.createdByRole);
+  h+='<span style="font-size:10px;background:var(--bg3);color:var(--text3);padding:2px 7px;border-radius:4px;font-weight:600">'+(isOpenShift?'Open Shift':'Open Swap')+'</span>';
+  h+='<span style="font-size:11px;color:var(--text3)">'+relTime(r.createdAt)+'</span>';
+  h+='</div>';
+
+  // Shift details
+  if(isOpenShift&&r.data){
+    h+='<div style="margin-top:8px">';
+    h+='<div style="font-size:15px;font-weight:700;color:var(--text)">'+fmtDateLabel(r.data.date)+'</div>';
+    h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">'+fmtRange(r.data.startTime,r.data.endTime)+'</div>';
+    h+=taskBadgeHtml(r.data.taskName,r.data.taskColor);
+    if(r.data.notes)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCDD '+esc(r.data.notes)+'</div>';
+    h+='</div>';
+  }
+  if(isOpenSwap&&r.data){
+    var rs=r.data.requesterShiftId?getShift(r.data.requesterShiftId):null;
+    if(rs){
+      h+='<div style="margin-top:8px;background:var(--bg3);border-radius:8px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:3px">';
+      h+='<div style="font-size:13px;font-weight:700;color:var(--text)">'+fmtDateLabel(rs.date)+'</div>';
+      h+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
+      h+=taskBadgeHtml(rs.taskName,rs.taskColor);
+      h+='</div>';
+    }
+    if(r.data.message)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCAC '+esc(r.data.message)+'</div>';
+  }
+  h+='</div>';
+  h+='<div style="flex-shrink:0">';
+  if(isOpenShift)h+='<span class="badge badge-'+(r.data&&r.data.status?r.data.status.toLowerCase():'open')+'">'+(r.data&&r.data.status?r.data.status:'Open')+'</span>';
+  if(isOpenSwap)h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span>';
+  h+='</div></div>';
+
+  // Comment thread (public)
+  h+=renderReqComments(r);
+
+  // Actions
+  h+='<div class="swap-actions" style="margin-top:12px">';
+  if(isOpenShift&&!isOwner&&r.data&&r.data.status==='OPEN'){
+    var conflict=hasConflict(u.id,r.data.date,r.data.startTime,r.data.endTime,null);
+    if(!conflict){
+      h+='<button class="btn btn-primary btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'openshift\'})">Take Shift</button>';
+    } else {
+      h+='<span style="font-size:11px;color:var(--amber)">\u26A0 Scheduling conflict</span>';
+    }
+  }
+  if(isOpenSwap&&!isOwner&&r.status==='pending'){
+    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'openswap\'})">Take This Swap</button>';
+  }
+  if((isMgr||isOwner)&&((isOpenShift&&r.data&&r.data.status==='OPEN')||(isOpenSwap&&r.status==='pending'))){
+    h+='<button class="btn btn-ghost btn-xs" data-rid="'+r.id+'" onclick="removeMarketplaceItem(this)">Remove</button>';
+  }
+  h+='</div></div>';
+  return h;
+}
+
+function removeMarketplaceItem(el){
+  if(!confirm('Remove this item from the marketplace?'))return;
+  var rid=el.getAttribute('data-rid'),req=getReq(rid);if(!req)return;
+  if(req.type==='openShift')req.data.status='cancelled';
+  req.status='cancelled';req.updatedAt=now();
+  toast('Removed from marketplace.','info');render();
+}
+
+// ─── OPEN SWAPS PAGE (public swap marketplace) ────────────────────
+// type === "swap" && visibility === "public"
+// Split by createdByRole: employee vs admin/manager
+function renderOpenSwaps(){
+  var u=state.currentUser,isMgr=isAdminOrMgr();
+  var allPublic=DB.requests.filter(function(r){
+    return r.type==='swap'&&r.visibility==='public';
+  });
+  var active=allPublic.filter(function(r){return r.status==='pending';});
+  var empPosted=active.filter(function(r){return r.createdByRole==='employee';});
+  var mgrPosted=active.filter(function(r){return r.createdByRole==='manager'||r.createdByRole==='admin';});
+  var resolved=allPublic.filter(function(r){return r.status!=='pending';});
+
+  var h='<div class="section-header"><div><div class="section-title">Open Swap Marketplace</div>';
+  h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">Public swap board \u2014 visible to all employees</div></div></div>';
+
+  if(!active.length&&!resolved.length){
+    h+='<div class="empty-state"><div class="empty-icon">\uD83D\uDD04</div><div class="empty-title">No open swaps</div>';
+    h+='<div class="empty-sub">When an employee posts an open swap request it will appear here.</div></div>';
+    return h;
+  }
+
+  // ── Admin/Manager Posted ───────────────────────────────────────
+  if(mgrPosted.length){
+    h+='<div class="req-section-head"><div class="req-section-dot" style="background:#a855f7"></div>';
+    h+='\uD83D\uDFE3 Admin / Manager Posted</div>';
+    mgrPosted.slice().reverse().forEach(function(r){h+=renderOpenSwapCard(r);});
+  }
+
+  // ── Employee Posted ────────────────────────────────────────────
+  if(empPosted.length){
+    h+='<div class="req-section-head" style="margin-top:20px"><div class="req-section-dot" style="background:#10b981"></div>';
+    h+='🔵 Employee Posted</div>';
+    empPosted.slice().reverse().forEach(function(r){h+=renderOpenSwapCard(r);});
+  }
+
+  // ── Recently resolved ─────────────────────────────────────────
+  if(resolved.length){
+    h+='<div style="margin-top:28px"><div style="font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Recently Resolved</div>';
+    resolved.slice(0,5).reverse().forEach(function(r){
+      var owner=getUser(r.userId);
+      var rs=r.data&&r.data.requesterShiftId?getShift(r.data.requesterShiftId):null;
+      h+='<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
+      h+='<div style="display:flex;align-items:center;gap:8px">';
+      if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+'">'+esc(initials(owner.name))+'</div>';
+      h+='<div><div style="font-size:13px;color:var(--text2)">'+(owner?esc(owner.name):'?')+(rs?' \u00B7 '+fmtDateLabel(rs.date)+' '+fmtRange(rs.startTime,rs.endTime):'')+'</div>';
+      h+=reqSourceBadge(r.createdByRole)+'</div></div>';
+      h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span>';
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  return h;
+}
+
+function renderOpenSwapCard(r){
+  var u=state.currentUser,isMgr=isAdminOrMgr();
+  var owner=getUser(r.userId);
+  var isOwner=r.userId===u.id;
+  var rs=r.data&&r.data.requesterShiftId?getShift(r.data.requesterShiftId):null;
+
+  var h='<div class="request-card">';
+  // Header: source badge + visibility + owner info
+  h+='<div class="request-card-header">';
+  h+='<div style="flex:1">';
+  h+='<div class="request-card-meta">';
+  if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+';width:20px;height:20px;font-size:9px">'+esc(initials(owner.name))+'</div>';
+  h+='<span style="font-size:13px;font-weight:600;color:var(--text)">'+(owner?esc(owner.name):'Unknown')+'</span>';
+  h+=reqSourceBadge(r.createdByRole);
+  h+=visibilityBadge(r.visibility);
+  h+='<span style="font-size:11px;color:var(--text3)">'+relTime(r.createdAt)+'</span>';
+  h+='</div>';
+  // Shift details
+  if(rs){
+    h+='<div style="margin-top:8px;background:var(--bg3);border-radius:8px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:3px">';
+    h+='<div style="font-size:13px;font-weight:700;color:var(--text)">'+fmtDateLabel(rs.date)+'</div>';
+    h+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
+    h+=taskBadgeHtml(rs.taskName,rs.taskColor);
+    h+='</div>';
+  }
+  if(r.data&&r.data.message)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCAC '+esc(r.data.message)+'</div>';
+  h+='</div>';
+  h+='<span class="badge badge-'+r.status+'" style="flex-shrink:0">'+esc(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>';
+  h+='</div>';
+  // Comment thread
+  h+=renderReqComments(r);
+  // Actions
+  h+='<div class="swap-actions" style="margin-top:12px">';
+  if(!isOwner&&r.status==='pending'){
+    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="volunteerOpenSwap(this)">\u2713 Take This Swap</button>';
+  }
+  if((isMgr||isOwner)&&r.status==='pending'){
+    h+='<button class="btn btn-cancel-req btn-sm" data-rid="'+r.id+'" onclick="openModal(\'cancel-request\',{id:\''+r.id+'\'})">Cancel</button>';
+  }
+  if(isMgr&&r.status==='pending'){
+    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="approveRequest(this)">\u2713 Approve</button>';
+    h+='<button class="btn btn-danger btn-sm" data-rid="'+r.id+'" onclick="openModal(\'reject-request\',{id:\''+r.id+'\'})">Reject</button>';
+  }
+  h+='</div></div>';
+  return h;
+}
+
 function renderOpenShifts(){
   var u=state.currentUser,isMgr=isAdminOrMgr();
   var allOpen=DB.requests.filter(function(r){return r.type==='openShift'&&r.visibility==='public';});
@@ -923,7 +1420,7 @@ function renderOpenShifts(){
   // Section: Employee Posted
   var openEmpList=empPosted.filter(function(r){return r.data&&r.data.status==='OPEN';});
   if(openEmpList.length){
-    h+='<div class="req-section-head" style="margin-top:20px"><div class="req-section-dot" style="background:#10b981"></div>\uD83D\uDD35 Employee Posted</div>';
+    h+='<div class="req-section-head" style="margin-top:20px"><div class="req-section-dot" style="background:#10b981"></div>🔵 Employee Posted</div>';
     openEmpList.forEach(function(r){h+=renderOpenShiftCard(r);});
   }
   if(!openMgrList.length&&!openEmpList.length){
@@ -1055,35 +1552,75 @@ function renderAvailabilityMgrView(){
   h+='<div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px">Team Availability Management</div>';
   h+=renderAvailabilityAdmin();h+='</div>';return h;
 }
+
+// Helper: render a 7-day availability grid from a proposedAvailability array (or live DB)
+function availGridHtml(avail7, emphColor){
+  // avail7 is an array of {dayOfWeek, startTime, endTime, isAvailable}
+  // emphColor: color for the time text (green for current, amber for requested)
+  var h='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">';
+  AVAIL_DAYS.forEach(function(wd){
+    var rec=avail7.find(function(a){return a.dayOfWeek===wd.idx;})||{isAvailable:false,startTime:'09:00',endTime:'17:00'};
+    h+='<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:8px 4px">';
+    h+='<div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">'+wd.label.slice(0,3)+'</div>';
+    if(rec.isAvailable)h+='<div style="font-size:9px;color:'+(emphColor||'var(--green)')+';line-height:1.6">'+fmt12(rec.startTime)+'<br>'+fmt12(rec.endTime)+'</div>';
+    else h+='<div style="font-size:10px;color:var(--text3);font-weight:500">Off</div>';
+    h+='</div>';
+  });
+  return h+'</div>';
+}
+
 function renderAvailabilityEmployee(){
   var u=state.currentUser,myAvail=getUserAvailability(u.id);
   var myReqs=DB.requests.filter(function(r){return r.type==='availability'&&r.userId===u.id;}).slice().reverse();
   var hasPending=myReqs.some(function(r){return r.status==='pending';});
+  var pendingReq=myReqs.find(function(r){return r.status==='pending';});
   var h='<div style="max-width:720px">';
   h+='<div class="section-header"><div><div class="section-title">My Weekly Availability</div></div>';
   if(!hasPending)h+='<button class="btn btn-primary" onclick="openModal(\'edit-availability\',{})">Request Change</button>';
   else h+='<span class="badge badge-pending">Change request pending</span>';
   h+='</div>';
-  h+='<div class="card" style="margin-bottom:20px"><div class="card-header"><span class="card-title">Current Availability</span></div>';
-  h+='<div style="padding:16px;display:grid;grid-template-columns:repeat(7,1fr);gap:8px">';
-  AVAIL_DAYS.forEach(function(wd){
-    var rec=myAvail.find(function(a){return a.dayOfWeek===wd.idx;})||{isAvailable:false,startTime:'09:00',endTime:'17:00'};
-    h+='<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px 4px">';
-    h+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">'+wd.label.slice(0,3)+'</div>';
-    if(rec.isAvailable)h+='<div style="font-size:10px;color:var(--green);line-height:1.6">'+fmt12(rec.startTime)+'<br>'+fmt12(rec.endTime)+'</div>';
-    else h+='<div style="font-size:12px;color:var(--text3);font-weight:500">Off</div>';
+
+  // Show ONLY pending requested change as primary — current is context only
+  if(pendingReq&&pendingReq.data&&pendingReq.data.proposedAvailability){
+    // Requested change is the primary display when pending
+    h+='<div class="card" style="margin-bottom:14px;border:1px solid rgba(245,158,11,.3)">';
+    h+='<div class="card-header" style="background:rgba(245,158,11,.06)">';
+    h+='<span class="card-title" style="color:var(--amber)">\u23F0 Requested Availability <span style="font-size:11px;font-weight:400;color:var(--text3)">Pending review</span></span>';
     h+='</div>';
-  });
-  h+='</div></div>';
-  if(myReqs.length){
-    h+='<div style="font-size:15px;font-weight:600;margin-bottom:14px">Change Requests</div>';
-    myReqs.slice(0,5).forEach(function(r){
-      h+='<div class="request-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    h+='<div style="padding:12px 16px 16px">';
+    h+=availGridHtml(pendingReq.data.proposedAvailability,'var(--amber)');
+    if(pendingReq.data.notes)h+='<div style="font-size:12px;color:var(--text2);margin-top:10px;padding:8px 10px;background:var(--bg3);border-radius:8px">\uD83D\uDCAC '+esc(pendingReq.data.notes)+'</div>';
+    h+='<div class="swap-actions" style="margin-top:10px">';
+    h+='<button class="btn btn-cancel-req btn-sm" data-rid="'+pendingReq.id+'" onclick="openModal(\'cancel-request\',{id:\''+pendingReq.id+'\'})">Cancel Request</button>';
+    h+='</div>';
+    h+='</div></div>';
+    // Current shown compactly below as context
+    h+='<details style="margin-bottom:14px"><summary style="font-size:12px;color:var(--text3);cursor:pointer;padding:6px 0">View current schedule (before change)</summary>';
+    h+='<div style="margin-top:8px">'+availGridHtml(myAvail,'var(--green)')+'</div></details>';
+  } else {
+    // No pending request — show current as primary
+    h+='<div class="card" style="margin-bottom:14px">';
+    h+='<div class="card-header"><span class="card-title">Current Availability</span></div>';
+    h+='<div style="padding:12px 16px 16px">';
+    h+=availGridHtml(myAvail,'var(--green)');
+    h+='</div></div>';
+  }
+
+  // Past requests list
+  var pastReqs=myReqs.filter(function(r){return r.status!=='pending';});
+  if(pastReqs.length){
+    h+='<div style="font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Past Requests</div>';
+    pastReqs.slice(0,4).forEach(function(r){
+      h+='<div class="request-card" style="margin-bottom:8px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
       h+='<span style="font-size:13px;font-weight:600;color:var(--text)">Availability Change</span>';
       h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span></div>';
-      if(r.data&&r.data.notes)h+='<div style="font-size:12px;color:var(--text2)">'+esc(r.data.notes)+'</div>';
-      h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">'+relTime(r.createdAt)+'</div>';
-      if(r.status==='pending'){h+='<div class="swap-actions" style="margin-top:8px"><button class="btn btn-cancel-req btn-sm" data-rid="'+r.id+'" onclick="openModal(\'cancel-request\',{id:\''+r.id+'\'})">Cancel Request</button></div>';}
+      if(r.data&&r.data.notes)h+='<div style="font-size:12px;color:var(--text2);margin-bottom:4px">'+esc(r.data.notes)+'</div>';
+      h+='<div style="font-size:11px;color:var(--text3)">'+relTime(r.createdAt)+'</div>';
+      if(r.data&&r.data.proposedAvailability){
+        h+='<details style="margin-top:8px"><summary style="font-size:11.5px;color:var(--text3);cursor:pointer">View requested schedule</summary>';
+        h+='<div style="margin-top:8px">'+availGridHtml(r.data.proposedAvailability,'var(--amber)')+'</div></details>';
+      }
       h+='</div>';
     });
   }
@@ -1117,16 +1654,30 @@ function renderAvailAdminReqs(){
   if(!reqs.length)return h+'<div class="empty-state"><div class="empty-icon">\u2705</div><div class="empty-title">No requests</div></div>';
   reqs.forEach(function(r){
     var emp=getUser(r.userId);if(!emp)return;
+    var currentAvail=getUserAvailability(r.userId);
     h+='<div class="request-card">';
+    // Header row: avatar + name + status badge
     h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">';
     h+='<div style="display:flex;align-items:center;gap:10px"><div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
     h+='<div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div><div class="swap-meta">'+relTime(r.createdAt)+'</div></div></div>';
     h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span></div>';
     if(r.data&&r.data.notes)h+='<div class="swap-message" style="margin-bottom:12px">'+esc(r.data.notes)+'</div>';
+    // Always show current + requested side by side
+    if(r.data&&r.data.proposedAvailability){
+      h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">';
+      h+='<div><div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Current</div>';
+      h+=availGridHtml(currentAvail,'var(--green)');
+      h+='</div>';
+      h+='<div><div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Requested</div>';
+      h+=availGridHtml(r.data.proposedAvailability,'var(--amber)');
+      h+='</div></div>';
+    }
     if(r.status==='pending'){
       h+='<div class="swap-actions">';
-      if(r.userId!==state.currentUser.id){h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="approveRequest(this)">\u2713 Approve</button><button class="btn btn-danger btn-sm" data-rid="'+r.id+'" onclick="openModal(\'reject-request\',{id:\''+r.id+'\'})">Reject</button>';}
-      else h+='<span style="font-size:12px;color:var(--text3);font-style:italic">\u26A0 Cannot self-approve</span>';
+      if(r.userId!==state.currentUser.id){
+        h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="approveRequest(this)">\u2713 Approve</button>';
+        h+='<button class="btn btn-danger btn-sm" data-rid="'+r.id+'" onclick="openModal(\'reject-request\',{id:\''+r.id+'\'})">Reject</button>';
+      } else h+='<span style="font-size:12px;color:var(--text3);font-style:italic">\u26A0 Cannot self-approve</span>';
       h+='</div>';
     }
     h+='</div>';
@@ -1284,8 +1835,117 @@ function renderModal(){
     'edit-task':         function(){return renderEditTaskModal(m.data.id);},
     'publish-schedule':  renderPublishScheduleModal,
     'request-swap':      function(){return renderRequestSwapModal(m.data.shiftId);},
+    'confirm-swap-accept':function(){return renderConfirmSwapAcceptModal(m.data.id);},
+    'confirm-swap-approve':function(){return renderConfirmSwapApproveModal(m.data.id);},
+    'accept-shift':      function(){return renderAcceptShiftModal(m.data.rid,m.data.type);},
+    'mark-absent':       function(){return renderMarkAbsentModal(m.data.shiftId,m.data.empId);},
   };
   return(fns[m.type]||function(){return'';})();
+}
+
+// ─── CONFIRMATION MODALS ─────────────────────────────────────────
+// Confirm swap acceptance (directed swap: named receiver)
+function renderConfirmSwapAcceptModal(id){
+  var req=getReq(id);if(!req)return'';
+  var owner=getUser(req.userId);
+  var rs=req.data&&req.data.requesterShiftId?getShift(req.data.requesterShiftId):null;
+  var body='<div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:18px">';
+  body+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Confirm you are accepting this swap:</div>';
+  if(owner)body+='<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Requested by <strong>'+esc(owner.name)+'</strong></div>';
+  if(rs){
+    body+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:6px">SHIFT YOU WILL TAKE:</div>';
+    body+='<div style="background:'+esc(rs.taskColor||'#6366f1')+';border-radius:8px;padding:12px;color:#fff;margin-bottom:12px">';
+    body+='<div style="font-weight:700">'+fmtDateLabel(rs.date)+'</div>';
+    body+='<div style="font-size:13px;opacity:.9">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
+    body+='<div style="font-size:12px;opacity:.8">'+esc(rs.taskName||'Shift')+'</div>';
+    body+='</div>';
+  }
+  if(req.data&&req.data.message)body+='<div style="font-size:12px;color:var(--text2);font-style:italic">\\u201C'+esc(req.data.message)+'\\u201D</div>';
+  body+='</div>';
+  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-success" data-rid="'+id+'" onclick="confirmSwapAccept(this)">Confirm Accept</button></div>';
+  return modalWrap('Accept Swap',body);
+}
+function confirmSwapAccept(el){
+  var rid=el.getAttribute('data-rid');
+  acceptSwapReq({getAttribute:function(){return rid;}});
+  closeModal();
+}
+
+// Confirm swap finalization (admin finalizes after employee accepted)
+function renderConfirmSwapApproveModal(id){
+  var req=getReq(id);if(!req)return'';
+  var requester=getUser(req.userId),receiver=getUser(req.data&&req.data.receiverId);
+  var rs=req.data&&req.data.requesterShiftId?getShift(req.data.requesterShiftId):null;
+  var body='<div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:18px">';
+  body+='<div style="font-size:13px;color:var(--text2);margin-bottom:12px">Both employees have agreed. Finalizing this swap will update the schedule immediately.</div>';
+  if(requester&&receiver){
+    body+='<div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-bottom:12px">';
+    body+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div class="avatar avatar-sm" style="background:'+esc(requester.avatarColor)+';margin:0 auto 4px">'+esc(initials(requester.name))+'</div><div style="font-size:12px;font-weight:600">'+esc(requester.name)+'</div></div>';
+    body+='<div style="font-size:20px;text-align:center;color:var(--text3)">\u21C4</div>';
+    body+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div class="avatar avatar-sm" style="background:'+esc(receiver.avatarColor)+';margin:0 auto 4px">'+esc(initials(receiver.name))+'</div><div style="font-size:12px;font-weight:600">'+esc(receiver.name)+'</div></div>';
+    body+='</div>';
+  }
+  if(rs)body+='<div style="font-size:12px;color:var(--text3)">Shift: '+fmtDateLabel(rs.date)+' \u00B7 '+fmtRange(rs.startTime,rs.endTime)+'</div>';
+  body+='</div>';
+  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-success" data-rid="'+id+'" onclick="finalizeSwapApproval(this)">\u2713 Finalize Swap</button></div>';
+  return modalWrap('Finalize Swap',body,'lg');
+}
+function finalizeSwapApproval(el){
+  var rid=el.getAttribute('data-rid');
+  approveRequest({getAttribute:function(){return rid;}});
+  closeModal();
+}
+
+// Unified accept-shift modal (openShift take OR openSwap volunteer)
+function renderAcceptShiftModal(rid,type){
+  var req=getReq(rid);if(!req)return'';
+  var isShift=type==='openshift';
+  var title=isShift?'Take This Shift':'Take This Swap';
+  var body='<div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:18px">';
+  if(isShift&&req.data){
+    body+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Confirm you are taking this shift:</div>';
+    body+='<div style="background:'+esc(req.data.taskColor||'#6366f1')+';border-radius:8px;padding:14px;color:#fff;margin-bottom:10px">';
+    body+='<div style="font-size:15px;font-weight:700">'+fmtDateLabel(req.data.date)+'</div>';
+    body+='<div style="font-size:13px;opacity:.9">'+fmtRange(req.data.startTime,req.data.endTime)+'</div>';
+    body+='<div style="font-size:12px;opacity:.8">'+esc(req.data.taskName||'Shift')+'</div>';
+    if(req.data.notes)body+='<div style="font-size:12px;opacity:.7;margin-top:6px">'+esc(req.data.notes)+'</div>';
+    body+='</div>';
+  } else if(!isShift&&req.data){
+    var rs=req.data.requesterShiftId?getShift(req.data.requesterShiftId):null;
+    var owner=getUser(req.userId);
+    body+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Confirm you are taking this swap offer:</div>';
+    if(owner)body+='<div style="font-size:13px;color:var(--text2);margin-bottom:8px">Posted by <strong>'+esc(owner.name)+'</strong></div>';
+    if(rs){
+      body+='<div style="background:'+esc(rs.taskColor||'#6366f1')+';border-radius:8px;padding:12px;color:#fff;margin-bottom:10px">';
+      body+='<div style="font-weight:700">'+fmtDateLabel(rs.date)+'</div>';
+      body+='<div style="font-size:13px;opacity:.9">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
+      body+='<div style="font-size:12px;opacity:.8">'+esc(rs.taskName||'Shift')+'</div>';
+      body+='</div>';
+    }
+    if(req.data.message)body+='<div style="font-size:12px;color:var(--text2);font-style:italic">\\u201C'+esc(req.data.message)+'\\u201D</div>';
+  }
+  body+='</div>';
+  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button>';
+  body+='<button class="btn btn-primary" data-rid="'+rid+'" data-type="'+type+'" onclick="executeAcceptShift(this)">Confirm</button></div>';
+  return modalWrap(title,body);
+}
+function executeAcceptShift(btn){
+  var rid=btn.getAttribute('data-rid'),type=btn.getAttribute('data-type');
+  var req=getReq(rid);if(!req)return;
+  var u=state.currentUser;
+  closeModal();
+  if(type==='openshift'){
+    // Take the open shift directly (no DOM form needed)
+    if(!req.data||req.data.status!=='OPEN'){toast('This shift is no longer available.','error');return;}
+    req.data.status='PENDING';req.data.claimedBy=u.id;req.data.claimType='take';req.data.swapShiftId=null;req.updatedAt=now();
+    DB.users.filter(function(x){return x.role==='ADMIN'||x.role==='MANAGER';}).forEach(function(mgr){
+      addNotif(mgr.id,'Shift Claimed',u.name+' wants the open shift on '+req.data.date+'.','info','openshift');
+    });
+    toast('Claim submitted! Awaiting approval.','success');render();
+  } else {
+    // Take open swap
+    volunteerOpenSwap({getAttribute:function(){return rid;}});
+  }
 }
 
 // ─── CANCEL REQUEST MODAL ─────────────────────────────────────────
@@ -1423,22 +2083,60 @@ function renderViewShiftModal(id){
   body+='</div>';
   if(isPast)body+='<div style="font-size:12px;color:var(--text3);margin-bottom:12px">\u23F0 This shift is in the past.</div>';
   if(onTO)body+='<div style="font-size:12px;color:var(--red);background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:10px;margin-bottom:12px">\u26D4 Employee has approved time off on this date.</div>';
-  // Comments
+  // Chat-style shift comments
   if(!s.employeeComments)s.employeeComments=[];
-  body+='<div class="swap-comment-section"><div class="swap-comment-title">Shift Comments</div>';
-  if(s.employeeComments.length){
-    s.employeeComments.forEach(function(c){
-      var cu=getUser(c.userId);
-      body+='<div class="comment-item" style="margin-bottom:8px"><div class="avatar avatar-sm" style="background:'+(cu?esc(cu.avatarColor):'#888')+'">'+(cu?esc(initials(cu.name)):'?')+'</div>';
-      body+='<div class="comment-bubble"><div class="comment-header"><span class="comment-author">'+esc(c.userName||'User')+'</span>'+roleBadgeHtml(c.role)+'<span class="comment-time">'+relTime(c.timestamp)+'</span></div><div class="comment-text">'+esc(c.message)+'</div></div></div>';
-    });
-  } else body+='<div style="font-size:12px;color:var(--text3);font-style:italic">No comments yet.</div>';
-  if(isOwn||isMgr)body+='<div class="comment-input-row"><input id="shiftComment-'+id+'" placeholder="Log an update or task note..." style="font-size:13px"><button class="btn btn-sm btn-ghost" data-sid="'+id+'" onclick="addShiftComment(this)">Post</button></div>';
+  var sComments=s.employeeComments;
+  body+='<div style="margin-top:14px;border:1px solid var(--border);border-radius:10px;overflow:hidden">';
+  body+='<div style="padding:8px 14px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
+  body+='<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">Shift Log</span>';
+  body+='<span style="font-size:11px;color:var(--text3)">'+sComments.length+' note'+(sComments.length!==1?'s':'')+'</span>';
+  body+='</div>';
+  body+='<div style="max-height:180px;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--bg2)">';
+  if(!sComments.length){
+    body+='<div style="text-align:center;padding:16px 0;font-size:12px;color:var(--text3)">No notes yet \u2014 log a task update below</div>';
+  }
+  sComments.forEach(function(c){
+    var cu=getUser(c.userId);
+    var isMe=(state.currentUser&&c.userId===state.currentUser.id);
+    var isPriv=(c.role==='admin'||c.role==='ADMIN'||c.role==='manager'||c.role==='MANAGER');
+    body+='<div style="display:flex;gap:8px;'+(isMe?'flex-direction:row-reverse':'')+'">';
+    body+='<div class="avatar avatar-sm" style="flex-shrink:0;background:'+(cu?esc(cu.avatarColor):'#888')+'">'+(cu?esc(initials(cu.name)):'?')+'</div>';
+    body+='<div style="max-width:75%">';
+    body+='<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;'+(isMe?'justify-content:flex-end':'justify-content:flex-start')+'">';
+    if(!isMe)body+='<span style="font-size:11px;font-weight:700;color:var(--text)">'+esc(c.userName||'User')+'</span>';
+    if(isPriv){body+=(c.role==='admin'||c.role==='ADMIN'?'<span class="comment-role-badge badge-admin-role">Admin</span>':'<span class="comment-role-badge badge-manager-role">Manager</span>');}
+    if(isMe)body+='<span style="font-size:11px;font-weight:700;color:var(--text)">You</span>';
+    body+='<span style="font-size:10px;color:var(--text3)">'+relTime(c.timestamp)+'</span>';
+    body+='</div>';
+    var bg=isMe?'var(--brand-bg)':isPriv?'rgba(239,68,68,.06)':'var(--bg3)';
+    var bdr=isMe?'rgba(99,102,241,.3)':isPriv?'rgba(239,68,68,.15)':'var(--border)';
+    body+='<div style="background:'+bg+';border:1px solid '+bdr+';border-radius:'+(isMe?'12px 2px 12px 12px':'2px 12px 12px 12px')+';padding:7px 11px;font-size:13px;line-height:1.5;color:var(--text2)">'+esc(c.message)+'</div>';
+    body+='</div></div>';
+  });
+  body+='</div>';
+  if(isOwn||isMgr){
+    body+='<div style="padding:8px 12px;border-top:1px solid var(--border);background:var(--bg2);display:flex;gap:8px">';
+    body+='<input id="shiftComment-'+id+'" placeholder="Log a task update or note\u2026" style="flex:1;font-size:13px">';
+    body+='<button class="btn btn-sm btn-primary" data-sid="'+id+'" onclick="addShiftComment(this)">Post</button>';
+    body+='</div>';
+  }
   body+='</div>';
   body+='<div class="modal-actions" style="flex-wrap:wrap;margin-top:16px">';
   if(isOwn&&!isPast)body+='<button class="btn btn-brand" onclick="closeModal();openModal(\'request-swap\',{shiftId:\''+id+'\'})">Request Swap</button>';
-  if(isMgr)body+='<button class="btn btn-ghost" onclick="closeModal();openModal(\'edit-shift\',{id:\''+id+'\'})">Edit Shift</button>';
-  body+='<button class="btn btn-ghost" onclick="closeModal()">Close</button></div>';
+  if(isMgr){
+    body+='<button class="btn btn-ghost" onclick="closeModal();openModal(\'edit-shift\',{id:\''+id+'\'})">Edit Shift</button>';
+    // Attendance marking for today/past shifts only
+    if(s.date<=todayStr()){
+      var att=getShiftAttendance(s.id,s.employeeId);
+      if(!att){
+        body+='<button class="btn btn-ghost" style="color:var(--red)" onclick="closeModal();openModal(\'mark-absent\',{shiftId:\''+s.id+'\',empId:\''+s.employeeId+'\'})">Mark Absent</button>';
+      } else {
+        body+='<span style="font-size:12px;color:var(--red);font-weight:600;padding:4px 8px">⚠ '+att.status.replace(/_/g,' ')+'</span>';
+      }
+    }
+  }
+  if(isOwn&&!isPast)body+='<button class="btn btn-amber" onclick="closeModal();submitCoverageFromShift(\''+id+'\')">Request Coverage</button>';
+  body+='</div>';
   return modalWrap('Shift Details',body,'lg');
 }
 function addShiftComment(btn){
@@ -1452,38 +2150,119 @@ function addShiftComment(btn){
   toast('Comment posted.','success');render();
 }
 // Swap request (creates a swap type request)
+// Submit coverage request directly from shift modal
+function submitCoverageFromShift(shiftId){
+  var u=state.currentUser,shift=getShift(shiftId);
+  if(!shift){toast('Shift not found.','error');return;}
+  if(shift.date<todayStr()){toast('Cannot request coverage for a past shift.','error');return;}
+  // Check for existing coverage request on this shift
+  var existing=DB.requests.find(function(r){return r.type==='coverage'&&r.data&&r.data.requesterShiftId===shiftId&&r.status==='pending';});
+  if(existing){toast('A coverage request already exists for this shift.','error');return;}
+  var req=createRequest('coverage',u.id,{
+    requesterShiftId:shiftId,
+    exchangeRequired:false,
+    message:u.name+' needs coverage for '+fmtDateLabel(shift.date)+' ('+fmtRange(shift.startTime,shift.endTime)+' \u00B7 '+(shift.taskName||'Shift')+')',
+    status:'OPEN',
+  },'public',[]);
+  // Notify all active users
+  DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!==u.id;}).forEach(function(emp){
+    addNotif(emp.id,'Coverage Needed',u.name+' needs coverage for a shift on '+fmtDateLabel(shift.date)+'.','info','openshift');
+  });
+  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'COVERAGE_REQUESTED',entityType:'Request',entityId:req.id,createdAt:now()});
+  toast('Coverage request posted to the marketplace!','success');
+  navigate('openshift');
+}
+
+
 function renderRequestSwapModal(shiftId){
   var u=state.currentUser,shift=getShift(shiftId);
   if(!shift)return modalWrap('Not Found','<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>');
-  var employees=DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!==u.id;});
-  var body='<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px">Your shift</div>';
+
+  // Step 1: Show the shift being surrendered
+  var body='<div style="margin-bottom:16px">';
+  body+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px">Shift you are giving up</div>';
   body+='<div style="border-radius:8px;padding:12px;background:'+esc(shift.taskColor||'#6366f1')+';border:1px solid rgba(255,255,255,.06)">';
-  body+='<div style="color:#fff;font-weight:600">'+fmtDateLabel(shift.date)+'</div><div style="color:rgba(255,255,255,.9);font-size:13px">'+fmtRange(shift.startTime,shift.endTime)+'</div>';
-  body+='<div style="color:rgba(255,255,255,.8);font-size:12px;margin-top:4px">'+esc(shift.taskName||'Shift')+'</div></div></div>';
-  body+='<div class="form-group"><label>Swap with (optional — leave blank for open swap)</label><select id="swEmp"><option value="">Open swap \u2014 any available employee</option>';
-  employees.forEach(function(e){body+='<option value="'+e.id+'">'+esc(e.name)+'</option>';});
-  body+='</select></div>';
-  body+='<div class="form-group"><label>Message to recipient (optional)</label><textarea id="swMsg" placeholder="Explain why\u2026"></textarea></div>';
-  body+='<div style="font-size:12px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:16px;line-height:1.6">\u26A0\uFE0F Swaps require manager/admin approval before taking effect.</div>';
-  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" data-shiftid="'+shiftId+'" onclick="submitSwapRequest(this)">Send Request</button></div>';
-  return modalWrap('Request Shift Swap',body);
+  body+='<div style="color:#fff;font-weight:600">'+fmtDateLabel(shift.date)+'</div>';
+  body+='<div style="color:rgba(255,255,255,.9);font-size:13px">'+fmtRange(shift.startTime,shift.endTime)+'</div>';
+  body+='<div style="color:rgba(255,255,255,.8);font-size:12px;margin-top:4px">'+esc(shift.taskName||'Shift')+'</div>';
+  body+='</div></div>';
+
+  // Step 2: Compute eligible shifts to swap with
+  var today=todayStr();
+  var eligible=DB.shifts.filter(function(s){
+    if(s.employeeId===u.id) return false;
+    if(s.date<today) return false;
+    var emp=getUser(s.employeeId);
+    if(!emp||emp.status!=='ACTIVE') return false;
+    // Would I conflict if I took this shift?
+    if(hasConflict(u.id,s.date,s.startTime,s.endTime,shift.id)) return false;
+    // Would the other employee conflict taking MY shift?
+    if(hasConflict(s.employeeId,shift.date,shift.startTime,shift.endTime,s.id)) return false;
+    return true;
+  });
+  eligible.sort(function(a,b){return a.date===b.date?timeToMins(a.startTime)-timeToMins(b.startTime):a.date<b.date?-1:1;});
+
+  body+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Available shifts to swap with</div>';
+
+  if(!eligible.length){
+    body+='<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:20px;text-align:center;margin-bottom:16px">';
+    body+='<div style="font-size:13px;color:var(--text3)">No eligible shifts found for swap.</div>';
+    body+='<div style="font-size:12px;color:var(--text3);margin-top:6px">Try requesting coverage instead to post this shift to the marketplace.</div>';
+    body+='</div>';
+  } else {
+    body+='<div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;margin-bottom:16px">';
+    eligible.forEach(function(s,idx){
+      var emp=getUser(s.employeeId);
+      body+='<label style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background=\'rgba(99,102,241,.06)\'" onmouseout="this.style.background=\'transparent\'">';
+      body+='<input type="radio" name="swapTarget" value="'+s.id+'" style="flex-shrink:0"'+(idx===0?' checked':'')+' >';
+      body+='<div style="width:4px;height:32px;border-radius:2px;flex-shrink:0;background:'+esc(s.taskColor||'#6366f1')+'"></div>';
+      if(emp)body+='<div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+';flex-shrink:0;width:28px;height:28px;font-size:10px">'+esc(initials(emp.name))+'</div>';
+      body+='<div style="flex:1;min-width:0">';
+      body+='<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(emp?esc(emp.name):'?')+' \u00B7 '+fmtDateLabel(s.date)+'</div>';
+      body+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(s.startTime,s.endTime)+' \u00B7 '+esc(s.taskName||'Shift')+'</div>';
+      body+='</div></label>';
+    });
+    body+='</div>';
+  }
+
+  body+='<div class="form-group"><label>Message (optional)</label><textarea id="swMsg" placeholder="Reason for swap\u2026" rows="2"></textarea></div>';
+  body+='<div style="font-size:12px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:16px;line-height:1.6">\u26A0\uFE0F Swaps require the other employee to accept, then manager/admin approval.</div>';
+  body+='<div class="modal-actions">';
+  body+='<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>';
+  if(eligible.length)body+='<button class="btn btn-primary" data-shiftid="'+shiftId+'" onclick="submitSwapRequest(this)">Propose Swap</button>';
+  body+='</div>';
+  return modalWrap('Request Shift Swap',body,'lg');
 }
+
 function submitSwapRequest(btn){
-  var shiftId=btn.getAttribute('data-shiftid'),u=state.currentUser,shift=getShift(shiftId);if(!shift)return;
+  var shiftId=btn.getAttribute('data-shiftid'),u=state.currentUser,shift=getShift(shiftId);
+  if(!shift){toast('Shift not found.','error');return;}
   if(shift.date<todayStr()){toast('Cannot swap a past shift.','error');return;}
-  var recId=(document.getElementById('swEmp')||{}).value||null;
+  var radio=document.querySelector('input[name="swapTarget"]:checked');
+  if(!radio||!radio.value){toast('Please select a shift to swap with.','error');return;}
+  var targetShiftId=radio.value;
+  var targetShift=getShift(targetShiftId);
+  if(!targetShift){toast('Selected shift no longer exists.','error');return;}
   var msg=(document.getElementById('swMsg')||{}).value||'';
+  var receiverId=targetShift.employeeId;
   var req=createRequest('swap',u.id,{
-    receiverId:recId||null,requesterShiftId:shiftId,receiverShiftId:null,
-    message:msg,adminNotes:'',responseMessage:'',responseBy:null,responseAt:null,
+    receiverId:receiverId,
+    requesterShiftId:shiftId,
+    receiverShiftId:targetShiftId,
+    exchangeRequired:true,
+    message:msg,
+    adminNotes:'',responseMessage:'',responseBy:null,responseAt:null,
     expiresAt:new Date(Date.now()+DB.settings.swapExpiryDays*864e5).toISOString(),
     reviewedById:null,reviewedAt:null,
   },'private',[]);
-  if(recId)addNotif(recId,'Swap Request',u.name+' has requested a shift swap with you.','swap','requests');
-  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'SWAP_REQUESTED',entityType:'Request',entityId:req.id,createdAt:now()});
-  toast('Swap request sent!','success');closeModal();
+  var receiver=getUser(receiverId);
+  addNotif(receiverId,'Swap Proposal',u.name+' proposed exchanging shifts with you: '+fmtDateLabel(shift.date)+' \u2194 '+fmtDateLabel(targetShift.date)+'.','swap','requests');
+  DB.users.filter(function(x){return(x.role==='ADMIN'||x.role==='MANAGER')&&x.status==='ACTIVE';}).forEach(function(mgr){
+    addNotif(mgr.id,'New Swap Proposal',u.name+' proposed a shift exchange with '+(receiver?receiver.name:'?')+'.','swap','requests');
+  });
+  DB.auditLog.push({id:nextId('a'),userId:u.id,action:'SWAP_PROPOSED',entityType:'Request',entityId:req.id,createdAt:now()});
+  toast('Swap proposal sent to '+(receiver?receiver.name:'employee')+'!','success');closeModal();
 }
-
 
 // ─── AVAILABILITY + TIME-OFF MODALS ──────────────────────────────
 function renderEditAvailabilityModal(){
@@ -1662,13 +2441,70 @@ function renderEditUserModal(id){var u=getUser(id);if(!u)return modalWrap('Not F
 function updateUserSubmit(btn){updateUser(btn.getAttribute('data-id')||'');}
 function updateUser(id){var u=getUser(id);if(!u)return;var name=((document.getElementById('uName')||{}).value||'').trim(),role=(document.getElementById('uRole')||{}).value;var pass=(document.getElementById('uPass')||{}).value||'';if(!name){toast('Name cannot be empty.','error');return;}if(pass){var err=validatePassword(pass);if(err){toast(err,'error');return;}u.password=pass;}u.name=name;u.role=role;toast('User updated.','success');closeModal();}
 
+
+// ─── ATTENDANCE SYSTEM (absence-only tracking) ────────────────────
+function renderMarkAbsentModal(shiftId, empId){
+  var s=getShift(shiftId),emp=getUser(empId);
+  if(!s||!emp)return'';
+  var body='<div style="background:var(--bg3);border-radius:10px;padding:14px;margin-bottom:18px">';
+  body+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">';
+  body+='<div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
+  body+='<div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div>';
+  body+='<div style="font-size:12px;color:var(--text2)">'+fmtDateLabel(s.date)+' \u00B7 '+fmtRange(s.startTime,s.endTime)+'</div></div></div>';
+  body+='</div>';
+  body+='<div class="form-group"><label>Absence Type *</label><select id="absType">';
+  [['called_out','Called Out'],['no_show','No Show'],['emergency','Emergency']].forEach(function(o){
+    body+='<option value="'+o[0]+'">'+o[1]+'</option>';
+  });
+  body+='</select></div>';
+  body+='<div class="form-group"><label>Notes (optional)</label><textarea id="absNotes" placeholder="Any additional context..."></textarea></div>';
+  body+='<div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button>';
+  body+='<button class="btn btn-danger" data-sid="'+shiftId+'" data-eid="'+empId+'" onclick="executeMarkAbsent(this)">Mark Absent</button></div>';
+  return modalWrap('Mark Absence',body);
+}
+function executeMarkAbsent(btn){
+  var sid=btn.getAttribute('data-sid'),eid=btn.getAttribute('data-eid');
+  var s=getShift(sid);if(!s)return;
+  var type=(document.getElementById('absType')||{}).value||'no_show';
+  var notes=((document.getElementById('absNotes')||{}).value||'').trim();
+  // Remove any existing log for same shift+emp
+  DB.attendanceLog=DB.attendanceLog.filter(function(a){return!(a.shiftId===sid&&a.employeeId===eid);});
+  DB.attendanceLog.push({
+    id:nextId('att'),shiftId:sid,employeeId:eid,date:s.date,
+    status:type,reason:type,notes:notes,
+    markedById:state.currentUser.id,markedAt:now()
+  });
+  var emp=getUser(eid);
+  addNotif(eid,'Attendance Noted',
+    'An absence has been recorded for your shift on '+s.date+'.',
+    'info','schedule');
+  DB.auditLog.push({id:nextId('a'),userId:state.currentUser.id,
+    action:'ATTENDANCE_MARKED',entityType:'Shift',entityId:sid,createdAt:now()});
+  toast('Absence recorded for '+(emp?emp.name:'employee')+'.','info');
+  closeModal();
+}
+function getShiftAttendance(shiftId, empId){
+  return DB.attendanceLog.find(function(a){return a.shiftId===shiftId&&a.employeeId===empId;});
+}
+function attendanceBadge(shiftId, empId){
+  var a=getShiftAttendance(shiftId,empId);
+  if(!a)return'';
+  var labels={called_out:'Called Out',no_show:'No Show',emergency:'Emergency'};
+  return'<span style="font-size:10px;background:rgba(239,68,68,.12);color:var(--red);padding:2px 7px;border-radius:4px;font-weight:700">'+(labels[a.status]||a.status)+'</span>';
+}
+
 // ─── EXPOSE + BOOT ────────────────────────────────────────────────
 var expose=[
   'navigate','logout','handleLogin','handleRegister',
   'changeWeek','changeMonth','goToday','setView','setScheduleScope',
   'setReqTypeFilter','setReqFilter','addReqComment','approveRequest','acceptSwapReq','declineSwapReq','executeCancelRequest','executeRejectRequest',
   'openModal','closeModal','pickTaskColor',
-  'viewShift','editShiftBtn','createShift','updateShift','deleteShiftConfirm','addShiftComment','submitSwapRequest',
+  'viewShift','editShiftBtn','createShift','updateShift','deleteShiftConfirm','addShiftComment','submitCoverageFromShift','submitSwapRequest','volunteerOpenSwap',
+  'renderMarketplace','renderMarketplaceCard','removeMarketplaceItem',
+  'renderConfirmSwapAcceptModal','confirmSwapAccept','renderConfirmSwapApproveModal','finalizeSwapApproval',
+  'renderAcceptShiftModal','executeAcceptShift',
+  'renderMarkAbsentModal','executeMarkAbsent',
+  'expireOpenSwaps',
   'approveOpenShiftReq','rejectOpenShiftReq','removeOpenShiftReq','submitClaimOpenShift','setClaimType','createOpenShift',
   'createUser','updateUser','updateUserSubmit','toggleStatusBtn','editUserBtn','filterUsers','setAdminTab',
   'toggleNotif','setNotifFilter','markAllRead','readAndNavigate',
@@ -1677,7 +2513,7 @@ var expose=[
   'setSettingsTab','toggleSetting','setSettingNum','toggleTaskActive','createTask','updateTask',
   'executePublish',
 ];
-var fns={navigate:navigate,logout:logout,handleLogin:handleLogin,handleRegister:handleRegister,changeWeek:changeWeek,changeMonth:changeMonth,goToday:goToday,setView:setView,setScheduleScope:setScheduleScope,setReqTypeFilter:setReqTypeFilter,setReqFilter:setReqFilter,addReqComment:addReqComment,approveRequest:approveRequest,acceptSwapReq:acceptSwapReq,declineSwapReq:declineSwapReq,executeCancelRequest:executeCancelRequest,executeRejectRequest:executeRejectRequest,openModal:openModal,closeModal:closeModal,pickTaskColor:pickTaskColor,viewShift:viewShift,editShiftBtn:editShiftBtn,createShift:createShift,updateShift:updateShift,deleteShiftConfirm:deleteShiftConfirm,addShiftComment:addShiftComment,submitSwapRequest:submitSwapRequest,approveOpenShiftReq:approveOpenShiftReq,rejectOpenShiftReq:rejectOpenShiftReq,removeOpenShiftReq:removeOpenShiftReq,submitClaimOpenShift:submitClaimOpenShift,setClaimType:setClaimType,createOpenShift:createOpenShift,createUser:createUser,updateUser:updateUser,updateUserSubmit:updateUserSubmit,toggleStatusBtn:toggleStatusBtn,editUserBtn:editUserBtn,filterUsers:filterUsers,setAdminTab:setAdminTab,toggleNotif:toggleNotif,setNotifFilter:setNotifFilter,markAllRead:markAllRead,readAndNavigate:readAndNavigate,saveProfile:saveProfile,savePassword:savePassword,setAvailTab:setAvailTab,availToggle:availToggle,submitAvailRequest:submitAvailRequest,setTOType:setTOType,submitTimeOff:submitTimeOff,setSettingsTab:setSettingsTab,toggleSetting:toggleSetting,setSettingNum:setSettingNum,toggleTaskActive:toggleTaskActive,createTask:createTask,updateTask:updateTask,executePublish:executePublish};
+var fns={navigate:navigate,logout:logout,handleLogin:handleLogin,handleRegister:handleRegister,changeWeek:changeWeek,changeMonth:changeMonth,goToday:goToday,setView:setView,setScheduleScope:setScheduleScope,setReqTypeFilter:setReqTypeFilter,setReqFilter:setReqFilter,addReqComment:addReqComment,approveRequest:approveRequest,acceptSwapReq:acceptSwapReq,declineSwapReq:declineSwapReq,executeCancelRequest:executeCancelRequest,executeRejectRequest:executeRejectRequest,openModal:openModal,closeModal:closeModal,pickTaskColor:pickTaskColor,viewShift:viewShift,editShiftBtn:editShiftBtn,createShift:createShift,updateShift:updateShift,deleteShiftConfirm:deleteShiftConfirm,addShiftComment:addShiftComment,submitCoverageFromShift:submitCoverageFromShift,submitSwapRequest:submitSwapRequest,volunteerOpenSwap:volunteerOpenSwap,removeMarketplaceItem:removeMarketplaceItem,confirmSwapAccept:confirmSwapAccept,finalizeSwapApproval:finalizeSwapApproval,executeAcceptShift:executeAcceptShift,executeMarkAbsent:executeMarkAbsent,expireOpenSwaps:expireOpenSwaps,approveOpenShiftReq:approveOpenShiftReq,rejectOpenShiftReq:rejectOpenShiftReq,removeOpenShiftReq:removeOpenShiftReq,submitClaimOpenShift:submitClaimOpenShift,setClaimType:setClaimType,createOpenShift:createOpenShift,createUser:createUser,updateUser:updateUser,updateUserSubmit:updateUserSubmit,toggleStatusBtn:toggleStatusBtn,editUserBtn:editUserBtn,filterUsers:filterUsers,setAdminTab:setAdminTab,toggleNotif:toggleNotif,setNotifFilter:setNotifFilter,markAllRead:markAllRead,readAndNavigate:readAndNavigate,saveProfile:saveProfile,savePassword:savePassword,setAvailTab:setAvailTab,availToggle:availToggle,submitAvailRequest:submitAvailRequest,setTOType:setTOType,submitTimeOff:submitTimeOff,setSettingsTab:setSettingsTab,toggleSetting:toggleSetting,setSettingNum:setSettingNum,toggleTaskActive:toggleTaskActive,createTask:createTask,updateTask:updateTask,executePublish:executePublish};
 expose.forEach(function(name){window[name]=fns[name];});
 
 render();
