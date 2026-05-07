@@ -79,8 +79,8 @@ function expireOpenSwaps(){
     if(r.type!=='swap'||r.visibility!=='public'||r.status!=='pending') return;
     if(Date.now()-new Date(r.createdAt).getTime()>=THREE_DAYS){
       r.status='rejected';r.updatedAt=now();
-      addNotif(r.userId,'Open Swap Expired',
-        'Your open swap request expired after 3 days with no interest.',
+      addNotif(r.userId,'Coverage Expired',
+        'Your coverage request expired after 3 days with no response.',
         'info','openswaps');
       DB.auditLog.push({id:nextId('a'),userId:r.userId,
         action:'OPEN_SWAP_EXPIRED',entityType:'Request',entityId:r.id,createdAt:now()});
@@ -258,16 +258,13 @@ function commentsLocked(req) {
   // 5. Employee-posted OPEN SWAP (public marketplace) — Casey (u5) wants coverage
   var caseyShift=DB.shifts.find(function(s){return s.employeeId==='u5'&&s.date>=todayStr();});
   if(caseyShift){
-    createRequest('swap','u5',{
-      receiverId:null,requesterShiftId:caseyShift.id,receiverShiftId:null,
+    createRequest('coverage','u5',{
+      requesterShiftId:caseyShift.id,
+      exchangeRequired:false,
       message:'Anyone available to cover this shift? Family commitment.',
-      adminNotes:'',responseMessage:'',responseBy:null,responseAt:null,
-      openSwap:true,
-      expiresAt:new Date(Date.now()+7*864e5).toISOString(),
-      reviewedById:null,reviewedAt:null,
-    },'public',[]);
+    },'public',[{userId:'u5',userName:'Casey Nguyen',role:'employee',message:'Anyone available to cover this shift? Family commitment.',timestamp:now()}]);
     DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!=='u5';}).forEach(function(emp){
-      addNotif(emp.id,'Open Swap Available','Casey Nguyen posted a shift to the open swap marketplace.','swap','requests');
+      addNotif(emp.id,'Coverage Needed','Casey Nguyen needs coverage for a shift.','info','openshift');
     });
   }
 
@@ -439,7 +436,7 @@ function getWeekShifts(off,arr){var dates=getWeekDays(off).map(fmtDate);return g
 // ─── RENDER CORE ──────────────────────────────────────────────────
 function render(){
   var app=document.getElementById('app');if(!app)return;
-  expireOpenSwaps(); // auto-expire stale open swaps
+  expireOpenSwaps(); // auto-expire stale coverage/public requests
   if(state.page==='login'){app.innerHTML=renderLogin();var pw=document.getElementById('loginPass');if(pw)pw.onkeydown=function(e){if(e.key==='Enter')handleLogin();};return;}
   if(state.page==='register'){app.innerHTML=renderRegister();var rp=document.getElementById('regPass2');if(rp)rp.onkeydown=function(e){if(e.key==='Enter')handleRegister();};return;}
   if(!state.currentUser){state.page='login';render();return;}
@@ -506,7 +503,7 @@ function renderSidebar(){
     if(p.id==='requests'  && reqBadge>0)      badge='<span class="nav-badge">'+reqBadge+'</span>';
     if(p.id==='openshift' && openBadge>0)     badge='<span class="nav-badge">'+openBadge+'</span>';
 
-    if(p.id==='preview'   && prevBadge>0)     badge='<span class="nav-badge">'+prevBadge+'</span>';
+    // Preview tab: no badge (by design)
     html+='<div class="nav-item'+(state.page===p.id?' active':'')+'" onclick="navigate(\''+p.id+'\')">'+p.icon+' '+p.label+badge+'</div>';
   });
   html+='</nav><div class="sidebar-footer"><div class="user-chip" onclick="navigate(\'profile\')" title="My Profile"><div class="avatar" style="background:'+esc(u.avatarColor)+'">'+esc(initials(u.name))+'</div><div style="flex:1;min-width:0"><div class="user-name">'+esc(u.name)+'</div><div class="user-role-label">'+esc(u.role.toLowerCase())+'</div></div></div>';
@@ -1081,7 +1078,7 @@ function declineSwapReq(el){
   addNotif(req.userId,'Swap Declined',u.name+' declined your swap request.','swap','requests');
   toast('Swap declined.','info');render();
 }
-// Employee volunteers to take a public open swap
+// Employee volunteers to take a coverage shift
 function volunteerOpenSwap(el){
   var rid=el.getAttribute('data-rid'),req=getReq(rid);if(!req)return;
   var u=state.currentUser;
@@ -1097,9 +1094,9 @@ function volunteerOpenSwap(el){
   req.comments.push({userId:u.id,userName:u.name,role:u.role.toLowerCase(),
     message:'\u2713 I can take this swap. Waiting for manager approval.',timestamp:now()});
   req.updatedAt=now();
-  addNotif(req.userId,'Swap Volunteer',u.name+' volunteered to take your open swap. Awaiting manager approval.','swap','requests');
+  addNotif(req.userId,'Swap Volunteer',u.name+' volunteered to cover your shift. Awaiting manager approval.','swap','requests');
   DB.users.filter(function(x){return x.role==='ADMIN'||x.role==='MANAGER';}).forEach(function(mgr){
-    addNotif(mgr.id,'Open Swap Claimed',u.name+' and '+req.userName+' swap is ready for review.','swap','requests');
+    addNotif(mgr.id,'Coverage Taken',u.name+' and '+req.userName+' swap is ready for review.','swap','requests');
   });
   DB.auditLog.push({id:nextId('a'),userId:u.id,action:'OPEN_SWAP_TAKEN',entityType:'Request',entityId:rid,createdAt:now()});
   toast('You have volunteered for this swap! Awaiting manager approval.','success');render();
@@ -1190,7 +1187,7 @@ function renderMarketplace(){
     h+='<div style="margin-top:28px"><div style="font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Recently Resolved</div>';
     resolved.forEach(function(r){
       var owner=getUser(r.userId);
-      var label=r.type==='openShift'?'Open Shift':r.type==='coverage'?'Coverage':'Open Swap';
+      var label=r.type==='openShift'?'Open Shift':r.type==='coverage'?'Coverage':'Swap';
       var statusLabel=r.type==='openShift'?'Filled':(r.status.charAt(0).toUpperCase()+r.status.slice(1));
       var badgeCls=r.type==='openShift'?'badge-active':'badge-'+r.status;
       h+='<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
@@ -1222,7 +1219,7 @@ function renderMarketplaceCard(r){
   if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+';width:20px;height:20px;font-size:9px">'+esc(initials(owner.name))+'</div>';
   h+='<span style="font-size:13px;font-weight:600;color:var(--text)">'+(owner?esc(owner.name):'Unknown')+'</span>';
   h+=reqSourceBadge(r.createdByRole);
-  h+='<span style="font-size:10px;background:var(--bg3);color:var(--text3);padding:2px 7px;border-radius:4px;font-weight:600">'+(isOpenShift?'Open Shift':isCoverage?'Coverage Request':'Open Swap')+'</span>';
+  h+='<span style="font-size:10px;background:var(--bg3);color:var(--text3);padding:2px 7px;border-radius:4px;font-weight:600">'+(isOpenShift?'Open Shift':isCoverage?'Coverage Request':'Swap')+'</span>';
   h+='<span style="font-size:11px;color:var(--text3)">'+relTime(r.createdAt)+'</span>';
   h+='</div>';
 
@@ -1293,7 +1290,7 @@ function renderMarketplaceCard(r){
     h+='<button class="btn btn-primary btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'coverage\'})">Take Shift</button>';
   }
   if(isOpenSwap&&!isOwner&&r.status==='pending'){
-    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'openswap\'})">Take This Swap</button>';
+    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'openswap\'})">Take Shift</button>';
   }
   if((isMgr||isOwner)&&((isOpenShift&&r.data&&r.data.status==='OPEN')||(isCoverage&&r.status==='pending')||(isOpenSwap&&r.status==='pending'))){
     h+='<button class="btn btn-ghost btn-xs" data-rid="'+r.id+'" onclick="removeMarketplaceItem(this)">Remove</button>';
@@ -1323,12 +1320,12 @@ function renderOpenSwaps(){
   var mgrPosted=active.filter(function(r){return r.createdByRole==='manager'||r.createdByRole==='admin';});
   var resolved=allPublic.filter(function(r){return r.status!=='pending';});
 
-  var h='<div class="section-header"><div><div class="section-title">Open Swap Marketplace</div>';
+  var h='<div class="section-header"><div><div class="section-title">Shift Marketplace</div>';
   h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">Public swap board \u2014 visible to all employees</div></div></div>';
 
   if(!active.length&&!resolved.length){
-    h+='<div class="empty-state"><div class="empty-icon">\uD83D\uDD04</div><div class="empty-title">No open swaps</div>';
-    h+='<div class="empty-sub">When an employee posts an open swap request it will appear here.</div></div>';
+    h+='<div class="empty-state"><div class="empty-icon">\uD83D\uDD04</div><div class="empty-title">No marketplace items</div>';
+    h+='<div class="empty-sub">Coverage and open shift requests will appear here.</div></div>';
     return h;
   }
 
@@ -1399,7 +1396,7 @@ function renderOpenSwapCard(r){
   // Actions
   h+='<div class="swap-actions" style="margin-top:12px">';
   if(!isOwner&&r.status==='pending'){
-    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="volunteerOpenSwap(this)">\u2713 Take This Swap</button>';
+    h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="volunteerOpenSwap(this)">\u2713 Take Shift</button>';
   }
   if((isMgr||isOwner)&&r.status==='pending'){
     h+='<button class="btn btn-cancel-req btn-sm" data-rid="'+r.id+'" onclick="openModal(\'cancel-request\',{id:\''+r.id+'\'})">Cancel</button>';
@@ -1579,7 +1576,11 @@ function renderAvailability(){
 function renderAvailabilityMgrView(){
   var h='<div style="margin-bottom:28px"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">My Availability</div><div style="font-size:12px;color:var(--text3)">Your personal recurring availability</div></div>';
   h+=renderAvailabilityEmployee();
-  h+='<div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px">Team Availability Management</div>';var _pac=DB.requests.filter(function(r){return r.type==="availability"&&r.status==="pending";}).length;if(_pac>0)h+='<span style="background:var(--brand-bg);color:var(--brand2);font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;margin-left:8px">'+_pac+'</span>';h+='';
+  h+='<div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">';
+  var _pav=DB.requests.filter(function(r){return r.type==='availability'&&r.status==='pending';}).length;
+  h+='<div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:'+(_pav>0?'var(--brand2)':'var(--text)')+';margin-bottom:16px;display:flex;align-items:center;gap:8px">Team Availability Management';
+  if(_pav>0)h+=' <span style="background:var(--brand-bg);color:var(--brand2);font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700">'+_pav+'</span>';
+  h+='</div>';
   h+=renderAvailabilityAdmin();h+='</div>';return h;
 }
 
@@ -1657,11 +1658,14 @@ function renderAvailabilityEmployee(){
   h+='</div>';return h;
 }
 function renderAvailabilityAdmin(){
-  var tabs=[{id:'overview',label:'Team Overview'},{id:'requests',label:'Change Requests'}];
+  var tabs=[{id:'overview',label:'Team Overview'},{id:'requests',label:'Pending'},{id:'approved',label:'Approved'},{id:'denied',label:'Denied'}];
   var h='<div class="admin-tabs">';
   tabs.forEach(function(t){h+='<button class="admin-tab'+(state.availTab===t.id?' active':'')+'" data-tab="'+t.id+'" onclick="setAvailTab(this)">'+t.label+'</button>';});
   h+='</div>';
-  return h+(state.availTab==='overview'?renderAvailOverview():renderAvailAdminReqs());
+  if(state.availTab==='overview') return h+renderAvailOverview();
+  if(state.availTab==='approved') return h+renderAvailHistoryTab('approved');
+  if(state.availTab==='denied') return h+renderAvailHistoryTab('rejected');
+  return h+renderAvailAdminReqs();
 }
 function setAvailTab(el){state.availTab=el.getAttribute('data-tab')||'overview';render();}
 function renderAvailOverview(){
@@ -1715,6 +1719,42 @@ function renderAvailAdminReqs(){
 }
 
 // ─── PREVIEW + SETTINGS ───────────────────────────────────────────
+
+function renderAvailHistoryTab(statusFilter){
+  var reqs=DB.requests.filter(function(r){return r.type==='availability'&&r.status===statusFilter;}).slice().reverse();
+  var statusLabel=statusFilter==='approved'?'Approved':'Denied';
+  var h='<div class="section-header"><div class="section-title">'+statusLabel+' Availability Requests</div></div>';
+  if(!reqs.length)return h+'<div class="empty-state"><div class="empty-icon">\u2705</div><div class="empty-title">No '+statusLabel.toLowerCase()+' requests</div></div>';
+  reqs.forEach(function(r){
+    var emp=getUser(r.userId);if(!emp)return;
+    var currentAvail=getUserAvailability(r.userId);
+    h+='<div class="request-card">';
+    h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">';
+    h+='<div style="display:flex;align-items:center;gap:10px"><div class="avatar avatar-sm" style="background:'+esc(emp.avatarColor)+'">'+esc(initials(emp.name))+'</div>';
+    h+='<div><div style="font-weight:600;color:var(--text)">'+esc(emp.name)+'</div><div class="swap-meta">'+relTime(r.createdAt)+'</div></div></div>';
+    h+='<span class="badge badge-'+r.status+'">'+statusLabel+'</span></div>';
+    if(r.data&&r.data.notes)h+='<div class="swap-message" style="margin-bottom:12px">'+esc(r.data.notes)+'</div>';
+    if(r.data&&r.data.proposedAvailability){
+      h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">';
+      if(statusFilter==='approved'){
+        h+='<div><div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Previous</div>';
+        h+=availGridHtml(r.data.proposedAvailability,'var(--text3)');h+='</div>';
+        h+='<div><div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Current</div>';
+        h+=availGridHtml(currentAvail,'var(--green)');h+='</div>';
+      } else {
+        h+='<div><div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Current</div>';
+        h+=availGridHtml(currentAvail,'var(--green)');h+='</div>';
+        h+='<div><div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Requested (Denied)</div>';
+        h+=availGridHtml(r.data.proposedAvailability,'var(--red)');h+='</div>';
+      }
+      h+='</div>';
+    }
+    if(r.comments&&r.comments.length)h+=renderReqComments(r);
+    h+='</div>';
+  });
+  return h;
+}
+
 function renderPreview(){
   if(!isAdminOrMgr())return'<div class="empty-state"><div class="empty-icon">\uD83D\uDD12</div><div class="empty-title">Access restricted</div></div>';
   var h='<div class="preview-banner"><div><div class="preview-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Preview Mode</div>';
@@ -1973,7 +2013,7 @@ function executeAcceptShift(btn){
     });
     toast('Claim submitted! Awaiting approval.','success');render();
   } else {
-    // Take open swap
+    // Take coverage shift
     volunteerOpenSwap({getAttribute:function(){return rid;}});
   }
 }
@@ -2198,7 +2238,7 @@ function submitCoverageFromShift(shiftId){
     exchangeRequired:false,
     message:u.name+' needs coverage for '+fmtDateLabel(shift.date)+' ('+fmtRange(shift.startTime,shift.endTime)+' \u00B7 '+(shift.taskName||'Shift')+')',
     status:'OPEN',
-  },'public',msg?[{userId:u.id,userName:u.name,role:u.role.toLowerCase(),message:u.name+' needs coverage for this shift.',timestamp:now()}]:[]);
+  },'public',[{userId:u.id,userName:u.name,role:u.role.toLowerCase(),message:u.name+' needs coverage for this shift.',timestamp:now()}]);
   // Notify all active users
   DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!==u.id;}).forEach(function(emp){
     addNotif(emp.id,'Coverage Needed',u.name+' needs coverage for a shift on '+fmtDateLabel(shift.date)+'.','info','openshift');
@@ -2255,6 +2295,11 @@ function renderRequestSwapModal(shiftId){
       body+='<div style="flex:1;min-width:0">';
       body+='<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(emp?esc(emp.name):'?')+' \u00B7 '+fmtDateLabel(s.date)+'</div>';
       body+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(s.startTime,s.endTime)+' \u00B7 '+esc(s.taskName||'Shift')+'</div>';
+      var _dow=new Date(s.date+'T00:00:00').getDay();
+      var _ea=DB.availability.find(function(a){return a.userId===u.id&&a.dayOfWeek===_dow;});
+      if(_ea&&!_ea.isAvailable){
+        body+='<div style="font-size:10px;color:var(--amber);margin-top:3px;display:flex;align-items:center;gap:3px">\u26A0 Outside your availability</div>';
+      }
       body+='</div></label>';
     });
     body+='</div>';
