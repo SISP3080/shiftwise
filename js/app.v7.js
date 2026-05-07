@@ -1116,6 +1116,7 @@ function renderMarketplace(){
   // Collect all marketplace items
   var allItems=DB.requests.filter(function(r){
     return (r.type==='openShift'&&r.visibility==='public')||
+           (r.type==='coverage'&&r.visibility==='public')||
            (r.type==='swap'&&r.visibility==='public');
   });
 
@@ -1127,7 +1128,7 @@ function renderMarketplace(){
   // Active marketplace pool (open, not yet claimed/approved)
   var active=allItems.filter(function(r){
     if(r.type==='openShift') return r.data&&r.data.status==='OPEN';
-    return r.status==='pending'; // open swaps
+    return r.status==='pending'; // open swaps + coverage
   });
 
   var empPosted=active.filter(function(r){return r.createdByRole==='employee';});
@@ -1189,7 +1190,7 @@ function renderMarketplace(){
     h+='<div style="margin-top:28px"><div style="font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Recently Resolved</div>';
     resolved.forEach(function(r){
       var owner=getUser(r.userId);
-      var label=r.type==='openShift'?'Open Shift':'Open Swap';
+      var label=r.type==='openShift'?'Open Shift':r.type==='coverage'?'Coverage':'Open Swap';
       var statusLabel=r.type==='openShift'?'Filled':(r.status.charAt(0).toUpperCase()+r.status.slice(1));
       var badgeCls=r.type==='openShift'?'badge-active':'badge-'+r.status;
       h+='<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
@@ -1209,6 +1210,7 @@ function renderMarketplaceCard(r){
   var u=state.currentUser,isMgr=isAdminOrMgr();
   var isOwner=r.userId===u.id;
   var isOpenShift=r.type==='openShift';
+  var isCoverage=r.type==='coverage';
   var isOpenSwap=r.type==='swap'&&r.visibility==='public';
   var owner=getUser(r.userId);
   var h='<div class="request-card">';
@@ -1220,7 +1222,7 @@ function renderMarketplaceCard(r){
   if(owner)h+='<div class="avatar avatar-sm" style="background:'+esc(owner.avatarColor)+';width:20px;height:20px;font-size:9px">'+esc(initials(owner.name))+'</div>';
   h+='<span style="font-size:13px;font-weight:600;color:var(--text)">'+(owner?esc(owner.name):'Unknown')+'</span>';
   h+=reqSourceBadge(r.createdByRole);
-  h+='<span style="font-size:10px;background:var(--bg3);color:var(--text3);padding:2px 7px;border-radius:4px;font-weight:600">'+(isOpenShift?'Open Shift':'Open Swap')+'</span>';
+  h+='<span style="font-size:10px;background:var(--bg3);color:var(--text3);padding:2px 7px;border-radius:4px;font-weight:600">'+(isOpenShift?'Open Shift':isCoverage?'Coverage Request':'Open Swap')+'</span>';
   h+='<span style="font-size:11px;color:var(--text3)">'+relTime(r.createdAt)+'</span>';
   h+='</div>';
 
@@ -1233,19 +1235,43 @@ function renderMarketplaceCard(r){
     if(r.data.notes)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCDD '+esc(r.data.notes)+'</div>';
     h+='</div>';
   }
-  if(isOpenSwap&&r.data){
+  if(isCoverage&&r.data){
+    var covShift=r.data.requesterShiftId?getShift(r.data.requesterShiftId):null;
+    if(covShift){
+      h+='<div style="margin-top:8px">';
+      h+='<div style="font-size:15px;font-weight:700;color:var(--text)">'+fmtDateLabel(covShift.date)+'</div>';
+      h+='<div style="font-size:13px;color:var(--text2);margin-top:2px">'+fmtRange(covShift.startTime,covShift.endTime)+'</div>';
+      h+=taskBadgeHtml(covShift.taskName,covShift.taskColor);
+      h+='</div>';
+    }
+    if(r.data.message)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCAC '+esc(r.data.message)+'</div>';
+  }
+    if(isOpenSwap&&r.data){
     var rs=r.data.requesterShiftId?getShift(r.data.requesterShiftId):null;
+    var recS=r.data.receiverShiftId?getShift(r.data.receiverShiftId):null;
     if(rs){
-      h+='<div style="margin-top:8px;background:var(--bg3);border-radius:8px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:3px">';
+      h+='<div style="margin-top:8px">';
+      h+='<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Shift being given up</div>';
+      h+='<div style="background:var(--bg3);border-radius:8px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:3px">';
       h+='<div style="font-size:13px;font-weight:700;color:var(--text)">'+fmtDateLabel(rs.date)+'</div>';
       h+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(rs.startTime,rs.endTime)+'</div>';
       h+=taskBadgeHtml(rs.taskName,rs.taskColor);
+      h+='</div>';
+      if(recS){
+        h+='<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-top:10px;margin-bottom:4px">In exchange for</div>';
+        h+='<div style="background:var(--bg3);border-radius:8px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:3px">';
+        h+='<div style="font-size:13px;font-weight:700;color:var(--text)">'+fmtDateLabel(recS.date)+'</div>';
+        h+='<div style="font-size:12px;color:var(--text2)">'+fmtRange(recS.startTime,recS.endTime)+'</div>';
+        h+=taskBadgeHtml(recS.taskName,recS.taskColor);
+        h+='</div>';
+      }
       h+='</div>';
     }
     if(r.data.message)h+='<div style="font-size:12px;color:var(--text3);margin-top:6px">\uD83D\uDCAC '+esc(r.data.message)+'</div>';
   }
   h+='</div>';
   h+='<div style="flex-shrink:0">';
+  if(isCoverage)h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span>';
   if(isOpenShift)h+='<span class="badge badge-'+(r.data&&r.data.status?r.data.status.toLowerCase():'open')+'">'+(r.data&&r.data.status?r.data.status:'Open')+'</span>';
   if(isOpenSwap)h+='<span class="badge badge-'+r.status+'">'+r.status.charAt(0).toUpperCase()+r.status.slice(1)+'</span>';
   h+='</div></div>';
@@ -1263,10 +1289,13 @@ function renderMarketplaceCard(r){
       h+='<span style="font-size:11px;color:var(--amber)">\u26A0 Scheduling conflict</span>';
     }
   }
+  if(isCoverage&&!isOwner&&r.status==='pending'){
+    h+='<button class="btn btn-primary btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'coverage\'})">Take Shift</button>';
+  }
   if(isOpenSwap&&!isOwner&&r.status==='pending'){
     h+='<button class="btn btn-success btn-sm" data-rid="'+r.id+'" onclick="openModal(\'accept-shift\',{rid:\''+r.id+'\',type:\'openswap\'})">Take This Swap</button>';
   }
-  if((isMgr||isOwner)&&((isOpenShift&&r.data&&r.data.status==='OPEN')||(isOpenSwap&&r.status==='pending'))){
+  if((isMgr||isOwner)&&((isOpenShift&&r.data&&r.data.status==='OPEN')||(isCoverage&&r.status==='pending')||(isOpenSwap&&r.status==='pending'))){
     h+='<button class="btn btn-ghost btn-xs" data-rid="'+r.id+'" onclick="removeMarketplaceItem(this)">Remove</button>';
   }
   h+='</div></div>';
@@ -1512,6 +1541,7 @@ function renderNotifDrawer(){
   if(state.notifFilter==='unread')filtered=all.filter(function(n){return !n.read;});
   else if(state.notifFilter==='requests')filtered=all.filter(function(n){return n.type==='request'||n.type==='info';});
   else if(state.notifFilter==='swaps')filtered=all.filter(function(n){return n.type==='swap';});
+  else if(state.notifFilter==='tasks')filtered=all.filter(function(n){return n.type==='task';});
   var h='<div class="notif-drawer-overlay" onclick="toggleNotif()"></div>';
   h+='<div class="notif-drawer">';
   h+='<div class="notif-drawer-header">';
@@ -1522,7 +1552,7 @@ function renderNotifDrawer(){
   h+='</div></div>';
   // Filter tabs
   h+='<div class="notif-filter-tabs">';
-  [['all','All'],['unread','Unread'],['requests','Requests'],['swaps','Swaps']].forEach(function(t){
+  [['all','All'],['unread','Unread'],['requests','Requests'],['swaps','Swaps'],['tasks','Tasks']].forEach(function(t){
     h+='<button class="notif-filter-tab'+(state.notifFilter===t[0]?' active':'')+'" onclick="setNotifFilter(\''+t[0]+'\')">'+t[1]+'</button>';
   });
   h+='</div>';
@@ -1549,7 +1579,7 @@ function renderAvailability(){
 function renderAvailabilityMgrView(){
   var h='<div style="margin-bottom:28px"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">My Availability</div><div style="font-size:12px;color:var(--text3)">Your personal recurring availability</div></div>';
   h+=renderAvailabilityEmployee();
-  h+='<div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px">Team Availability Management</div>';
+  h+='<div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px">Team Availability Management</div>';var _pac=DB.requests.filter(function(r){return r.type==="availability"&&r.status==="pending";}).length;if(_pac>0)h+='<span style="background:var(--brand-bg);color:var(--brand2);font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;margin-left:8px">'+_pac+'</span>';h+='';
   h+=renderAvailabilityAdmin();h+='</div>';return h;
 }
 
@@ -1900,7 +1930,7 @@ function finalizeSwapApproval(el){
 function renderAcceptShiftModal(rid,type){
   var req=getReq(rid);if(!req)return'';
   var isShift=type==='openshift';
-  var title=isShift?'Take This Shift':'Take This Swap';
+  var isCov=m.data&&m.data.type==='coverage';var title=isShift?'Take This Shift':isCov?'Take This Shift':'Accept This Swap';
   var body='<div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:18px">';
   if(isShift&&req.data){
     body+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Confirm you are taking this shift:</div>';
@@ -2147,7 +2177,12 @@ function addShiftComment(btn){
   if(!s.employeeComments)s.employeeComments=[];
   s.employeeComments.push({userId:u.id,userName:u.name,role:u.role.toLowerCase(),message:msg,timestamp:now()});
   if(inp)inp.value='';s.updatedAt=now();
-  toast('Comment posted.','success');render();
+  // Notify assigned employee + managers about task comment
+  if(s.employeeId!==u.id)addNotif(s.employeeId,'Task Comment',u.name+' commented on your '+esc(s.taskName||'shift')+' on '+fmtDateLabel(s.date)+'.','task','schedule');
+  DB.users.filter(function(x){return(x.role==='ADMIN'||x.role==='MANAGER')&&x.status==='ACTIVE'&&x.id!==u.id;}).forEach(function(mgr){
+    addNotif(mgr.id,'Task Comment',u.name+' added a note to '+(getUser(s.employeeId)?getUser(s.employeeId).name+"'s":'')+' '+esc(s.taskName||'shift')+'.','task','schedule');
+  });
+    toast('Comment posted.','success');render();
 }
 // Swap request (creates a swap type request)
 // Submit coverage request directly from shift modal
@@ -2163,7 +2198,7 @@ function submitCoverageFromShift(shiftId){
     exchangeRequired:false,
     message:u.name+' needs coverage for '+fmtDateLabel(shift.date)+' ('+fmtRange(shift.startTime,shift.endTime)+' \u00B7 '+(shift.taskName||'Shift')+')',
     status:'OPEN',
-  },'public',[]);
+  },'public',msg?[{userId:u.id,userName:u.name,role:u.role.toLowerCase(),message:u.name+' needs coverage for this shift.',timestamp:now()}]:[]);
   // Notify all active users
   DB.users.filter(function(x){return x.status==='ACTIVE'&&x.id!==u.id;}).forEach(function(emp){
     addNotif(emp.id,'Coverage Needed',u.name+' needs coverage for a shift on '+fmtDateLabel(shift.date)+'.','info','openshift');
@@ -2245,6 +2280,8 @@ function submitSwapRequest(btn){
   if(!targetShift){toast('Selected shift no longer exists.','error');return;}
   var msg=(document.getElementById('swMsg')||{}).value||'';
   var receiverId=targetShift.employeeId;
+  var initComments=[];
+  if(msg)initComments.push({userId:u.id,userName:u.name,role:u.role.toLowerCase(),message:msg,timestamp:now()});
   var req=createRequest('swap',u.id,{
     receiverId:receiverId,
     requesterShiftId:shiftId,
@@ -2254,7 +2291,7 @@ function submitSwapRequest(btn){
     adminNotes:'',responseMessage:'',responseBy:null,responseAt:null,
     expiresAt:new Date(Date.now()+DB.settings.swapExpiryDays*864e5).toISOString(),
     reviewedById:null,reviewedAt:null,
-  },'private',[]);
+  },'private',initComments);
   var receiver=getUser(receiverId);
   addNotif(receiverId,'Swap Proposal',u.name+' proposed exchanging shifts with you: '+fmtDateLabel(shift.date)+' \u2194 '+fmtDateLabel(targetShift.date)+'.','swap','requests');
   DB.users.filter(function(x){return(x.role==='ADMIN'||x.role==='MANAGER')&&x.status==='ACTIVE';}).forEach(function(mgr){
